@@ -30,6 +30,13 @@ A 2½-minute click-through of the new features: **[watch on YouTube](https://you
 - **Firmware:** PAXX extended firmware **2.0.0, build 24**.
 - **multiACE add-on:** version **1.27b**.
 
+**Where to get them**
+
+- multiACE add-on (downloads and install steps): **[github.com/decay71/multiACE](https://github.com/decay71/multiACE)** — see its [Releases](https://github.com/decay71/multiACE/releases) for version 1.27b.
+- PAXX extended firmware for the Snapmaker U1: **[github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware)**.
+
+Those projects are made by other people; follow their own instructions for installing on your printer.
+
 That is the combination it was built and tested on. Older versions have not been tested. Without multiACE the slicer still works and prints the normal way; only the automatic ACE printing needs it.
 
 ## Downloads
