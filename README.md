@@ -55,7 +55,7 @@ A separate small patch for the printer. When an ACE is connected to a toolhead a
 
 - It is separate from the slicer. The slicer works without it.
 - It is made for one firmware version (2.0.0, build 24) and switches itself off on any other.
-- Status: **experimental**. Built on a test bench and loaded the temporary way on one real printer, where it showed correctly. The permanent install has not been tried on a real printer. It is on the [Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases) with its own instructions.
+- Status: **experimental**. Built on a test bench and tried on two real printers: loaded the temporary way on one, installed permanently on the other. After a permanent install you need to reboot the printer and enter your Wi-Fi again on its touch screen. It is on the [Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases) with its own instructions.
 
 ## Known limits
 
