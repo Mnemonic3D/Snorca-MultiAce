@@ -181,6 +181,8 @@
 #include <wx/wupdlock.h>   // FOS: wxWindowUpdateLocker, nozzle panel rebuild
 #include <wx/webview.h>      // SNORCA: multiACE page window
 #include <wx/weakref.h>      // SNORCA
+#include <wx/radiobut.h>     // SNORCA (2026-11-13): print options window
+#include <wx/statline.h>     // SNORCA (2026-11-13)
 #include "Widgets/WebView.hpp" // SNORCA
 #include "../Utils/SnorcaColourName.hpp" // SNORCA: plain colour names in the multiACE windows
 
@@ -15204,6 +15206,65 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, bool us
         p->export_gcode(fs::path(), false, std::move(upload_job));
     }
 }
+// SNORCA (2026-11-13): print options asked BEFORE an ACE job is sent.
+// Every ACE job used to run with no bed mesh and no flow calibration (the start body hard-coded both off). Same plain  SNORCA
+// style as the "Printing on <printer>" window. Cancel returns false: nothing is exported or sent. The choice is kept in  SNORCA
+// the app config (snorca_print_bed_calibration = area|full|none, snorca_print_flow_calibration = 1|0); first time:  SNORCA
+// print area only, flow calibration ticked.                                                                          SNORCA
+static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, std::string &bed, bool &flow)   // SNORCA
+{                                                                                                              // SNORCA
+    AppConfig *cfg = wxGetApp().app_config;                                                                    // SNORCA
+    bed = cfg->get("snorca_print_bed_calibration");                                                            // SNORCA
+    if (bed != "area" && bed != "full" && bed != "none") bed = "area";                                         // SNORCA
+    const std::string fl = cfg->get("snorca_print_flow_calibration");                                          // SNORCA
+    flow = fl != "0";                                                                                          // SNORCA
+    wxDialog dlg(parent, wxID_ANY, format_wxstr(_L("Print on %1% (multiACE)"), printer), wxDefaultPosition, wxDefaultSize, // SNORCA
+                 wxDEFAULT_DIALOG_STYLE, "SnorcaPrintOptions");                                                  // SNORCA
+    dlg.SetBackgroundColour(*wxWHITE);                                                                         // SNORCA
+    const int pad = dlg.FromDIP(16), indent = dlg.FromDIP(26);                                                 // SNORCA
+    auto *top = new wxBoxSizer(wxVERTICAL);                                                                    // SNORCA
+    auto bold = [&](const wxString &t, bool larger) {                                                          // SNORCA
+        auto *s = new wxStaticText(&dlg, wxID_ANY, t); wxFont f = s->GetFont().Bold(); if (larger) f = f.Larger(); s->SetFont(f); return s; }; // SNORCA
+    auto grey = [&](const wxString &t) {                                                                       // SNORCA
+        auto *s = new wxStaticText(&dlg, wxID_ANY, t); s->SetForegroundColour(wxColour(110, 110, 110)); return s; }; // SNORCA
+    top->Add(bold(_L("Before this print starts"), true), 0, wxLEFT | wxRIGHT | wxTOP, pad);                    // SNORCA
+    top->Add(bold(_L("Bed calibration"), false), 0, wxLEFT | wxRIGHT | wxTOP, pad);                            // SNORCA
+    struct Choice { const char *key; wxString label, help; };                                                  // SNORCA
+    const Choice choices[] = {{"area", _L("Print area only"), _L("Probes the bed only where this print sits. Quicker.")},   // SNORCA
+                              {"full", _L("Full bed"), _L("Probes the whole bed. Slower, most thorough.")},                 // SNORCA
+                              {"none", _L("No bed calibration"), _L("Uses the bed map already stored on the printer.")}}; // SNORCA
+    std::vector<std::pair<std::string, wxRadioButton *>> radios;                                               // SNORCA
+    for (const auto &c : choices) {                                                                            // SNORCA
+        auto *rb = new wxRadioButton(&dlg, wxID_ANY, c.label, wxDefaultPosition, wxDefaultSize, radios.empty() ? wxRB_GROUP : 0, wxDefaultValidator, std::string("bed_") + c.key); // SNORCA
+        rb->SetValue(bed == c.key);                                                                            // SNORCA
+        top->Add(rb, 0, wxLEFT | wxRIGHT | wxTOP, pad);                                                        // SNORCA
+        top->Add(grey(c.help), 0, wxLEFT | wxRIGHT, pad + indent);                                             // SNORCA
+        radios.emplace_back(c.key, rb);                                                                        // SNORCA
+    }                                                                                                          // SNORCA
+    top->Add(new wxStaticLine(&dlg), 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad);                             // SNORCA
+    top->Add(bold(_L("Flow calibration"), false), 0, wxLEFT | wxRIGHT | wxTOP, pad);                           // SNORCA
+    auto *cb = new wxCheckBox(&dlg, wxID_ANY, _L("Calibrate flow for each head used"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, "flow_cal"); // SNORCA
+    cb->SetValue(flow);                                                                                        // SNORCA
+    top->Add(cb, 0, wxLEFT | wxRIGHT | wxTOP, pad);                                                            // SNORCA
+    top->Add(grey(_L("The printer measures each head before printing. Adds a few minutes.")), 0, wxLEFT | wxRIGHT, pad + indent); // SNORCA
+    top->Add(grey(_L("The slicer remembers what you picked for next time.")), 0, wxLEFT | wxRIGHT | wxTOP, pad + dlg.FromDIP(8)); // SNORCA
+    auto *btns = new wxBoxSizer(wxHORIZONTAL);                                                                 // SNORCA
+    auto *cancel = new wxButton(&dlg, wxID_CANCEL, _L("Cancel"));                                              // SNORCA
+    auto *print  = new wxButton(&dlg, wxID_OK, _L("Print"));                                                   // SNORCA
+    btns->AddStretchSpacer(); btns->Add(cancel, 0, wxRIGHT, dlg.FromDIP(8)); btns->Add(print);                 // SNORCA
+    top->Add(btns, 0, wxEXPAND | wxALL, pad);                                                                  // SNORCA
+    dlg.SetSizerAndFit(top);                                                                                   // SNORCA
+    dlg.CenterOnParent();                                                                                      // SNORCA
+    print->SetDefault(); print->SetFocus();                                                                    // SNORCA
+    if (dlg.ShowModal() != wxID_OK) return false;                                                              // SNORCA
+    for (const auto &r : radios) if (r.second->GetValue()) bed = r.first;                                      // SNORCA
+    flow = cb->GetValue();                                                                                     // SNORCA
+    cfg->set("snorca_print_bed_calibration", bed);                                                             // SNORCA
+    cfg->set("snorca_print_flow_calibration", flow ? "1" : "0");                                               // SNORCA
+    cfg->save();                                                                                               // SNORCA: kept even if the slicer is not closed normally
+    return true;                                                                                               // SNORCA
+}                                                                                                              // SNORCA
+
 // FOS: send the current plate's G-code to a multi-material supply system (MMS).
 // Reuses the stock print-host pipeline: a synthetic physical-printer config
 // drives PrintHostJob, then priv::export_gcode() exports to a temp file and
@@ -15319,6 +15380,14 @@ void Plater::fos_send_to_mms(int mms_system)
     // The inbox validates on extension and stores only; there is nothing to start.
     upload_job.upload_data.upload_path = default_output_file.filename();
     upload_job.upload_data.post_action = PrintHostPostUploadAction::None;
+
+    if (mms_system == MultiMaterialSupply::mmsMultiACE) {                                                      // SNORCA (2026-11-13)
+        std::string bed; bool flow = true;                                                                     // SNORCA
+        if (!snorca_ask_print_options(wxGetApp().mainframe, from_u8(wxGetApp().preset_bundle->printers.get_selected_preset_name()), bed, flow)) // SNORCA
+            return;                                                                                            // SNORCA: Cancel = nothing exported, nothing sent
+        upload_job.upload_data.extended_info["snorca_print_bed_calibration"]  = bed;                           // SNORCA
+        upload_job.upload_data.extended_info["snorca_print_flow_calibration"] = flow ? "1" : "0";              // SNORCA
+    }                                                                                                          // SNORCA
 
     p->export_gcode(fs::path(), false, std::move(upload_job));
 }

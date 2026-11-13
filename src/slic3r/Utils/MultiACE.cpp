@@ -22,6 +22,7 @@
 #include <thread>   // SNORCA
 #include <regex>    // SNORCA
 #include <fstream>  // SNORCA
+#include <cstdio>   // SNORCA (2026-11-13)
 #include <boost/algorithm/string.hpp> // SNORCA
 #include <boost/filesystem/operations.hpp> // SNORCA
 
@@ -255,6 +256,110 @@ static std::string snorca_heat_before_initial_load(const boost::filesystem::path
     return ec ? std::string() : heat;                                                                         // SNORCA
 }                                                                                                             // SNORCA
 
+// SNORCA (2026-11-13): the print options window (Plater.cpp snorca_ask_print_options) puts the user's choice in the  SNORCA
+// upload's extended_info. Missing keys (a send that did not pass that window) keep the earlier behaviour:      SNORCA
+// bed mesh off, flow calibration off, file unchanged.                                                          SNORCA
+static std::string snorca_choice(const PrintHostUpload &up, const char *key)                                    // SNORCA
+{                                                                                                             // SNORCA
+    const auto it = up.extended_info.find(key);                                                               // SNORCA
+    return it == up.extended_info.end() ? std::string() : it->second;                                         // SNORCA
+}                                                                                                             // SNORCA
+
+// SNORCA (2026-11-13): "Print area only" vs "Full bed". multiACE only switches the bed mesh on or off            SNORCA
+// (SET_PRINT_PREFERENCES BED_LEVEL=..). The mesh itself is the start G-code's BED_MESH_CALIBRATE line; the    SNORCA
+// printer's Klipper (bed_mesh.py set_adaptive_mesh) probes only the area of the defined objects when the line  SNORCA
+// carries ADAPTIVE=1, and the whole bed with ADAPTIVE=0 or no parameter. So, before upload:                    SNORCA
+//   full: every BED_MESH_CALIBRATE before the first layer gets ADAPTIVE=0 (explicit, so a printer-side          SNORCA
+//         "force adaptive" tweak, which respects an explicit ADAPTIVE, cannot turn it into a partial mesh);     SNORCA
+//   area: those lines get ADAPTIVE=1. Klipper needs object outlines for that. When the file has no            SNORCA
+//         EXCLUDE_OBJECT_DEFINE of its own (the U1 process default exclude_object = 0), one outline of        SNORCA
+//         everything this print extrudes (all layers, start/end G-code excluded, arcs as full circles) is     SNORCA
+//         defined just before the mesh line and removed again right after it (EXCLUDE_OBJECT_DEFINE RESET=1), SNORCA
+//         so the printer's object list is empty again for the print itself;                                    SNORCA
+//   none: unchanged (BED_LEVEL=0 makes the printer skip the mesh line while printing).                         SNORCA
+// Returns a one-line note for the log. On any problem the file is left unchanged.                             SNORCA
+static std::string snorca_apply_bed_choice(const boost::filesystem::path &path, const std::string &bed)         // SNORCA
+{                                                                                                             // SNORCA
+    if (bed != "area" && bed != "full") return "bed '" + bed + "': file unchanged";                           // SNORCA
+    auto strip = [](std::string t) { const size_t c = t.find(';'); if (c != std::string::npos) t.erase(c);   // SNORCA
+        if (!t.empty() && t.back() == '\r') t.pop_back(); boost::algorithm::trim(t); return t; };              // SNORCA
+    auto upper = [](std::string t) { for (auto &ch : t) ch = char(std::toupper((unsigned char) ch)); return t; }; // SNORCA
+    auto word = [&](const std::string &code) { const size_t s = code.find_first_of(" \t"); return upper(code.substr(0, s)); }; // SNORCA
+    std::vector<long> mesh; long first_layer = -1; bool has_define = false;                                  // SNORCA
+    double minx = 1e18, miny = 1e18, maxx = -1e18, maxy = -1e18;                                              // SNORCA
+    {                                                                                                         // SNORCA
+        std::ifstream in(path.string(), std::ios::binary); if (!in) return "could not read the file: unchanged"; // SNORCA
+        std::string l, type; long n = -1; bool abs_xy = true, abs_e = false; double x = 0, y = 0, e = 0;     // SNORCA
+        auto add = [&](double px, double py) { minx = std::min(minx, px); miny = std::min(miny, py); maxx = std::max(maxx, px); maxy = std::max(maxy, py); }; // SNORCA
+        while (std::getline(in, l)) {                                                                         // SNORCA
+            ++n;                                                                                              // SNORCA
+            if (!l.empty() && l[0] == ';') {                                                                  // SNORCA
+                if (first_layer < 0 && l.rfind(";LAYER_CHANGE", 0) == 0) first_layer = n;                     // SNORCA
+                else if (l.rfind(";TYPE:", 0) == 0) { type = l.substr(6); boost::algorithm::trim(type); }      // SNORCA
+                continue;                                                                                     // SNORCA
+            }                                                                                                 // SNORCA
+            const std::string code = strip(l); if (code.empty()) continue;                                    // SNORCA
+            const std::string w = word(code);                                                                 // SNORCA
+            if (w == "BED_MESH_CALIBRATE") { if (first_layer < 0) mesh.push_back(n); continue; }              // SNORCA
+            if (w == "EXCLUDE_OBJECT_DEFINE") { has_define = true; continue; }                                // SNORCA
+            if (w == "G90") { abs_xy = true; continue; } if (w == "G91") { abs_xy = false; continue; }        // SNORCA
+            if (w == "M82") { abs_e = true; continue; }  if (w == "M83") { abs_e = false; continue; }         // SNORCA
+            const bool g01 = w == "G0" || w == "G1", arc = w == "G2" || w == "G3";                            // SNORCA
+            if (!g01 && !arc && w != "G92") continue;                                                         // SNORCA
+            std::map<char, double> p; std::stringstream ss(code.substr(w.size())); std::string tok;          // SNORCA
+            while (ss >> tok) if (tok.size() > 1 && std::isalpha((unsigned char) tok[0]))                     // SNORCA
+                try { p[char(std::toupper((unsigned char) tok[0]))] = std::stod(tok.substr(1)); } catch (...) {} // SNORCA
+            if (w == "G92") { if (p.count('E')) e = p['E']; if (p.count('X')) x = p['X']; if (p.count('Y')) y = p['Y']; continue; } // SNORCA
+            const double nx = p.count('X') ? (abs_xy ? p['X'] : x + p['X']) : x;                              // SNORCA
+            const double ny = p.count('Y') ? (abs_xy ? p['Y'] : y + p['Y']) : y;                              // SNORCA
+            bool extrude = false;                                                                             // SNORCA
+            if (p.count('E')) { extrude = abs_e ? p['E'] > e + 1e-9 : p['E'] > 0; if (abs_e) e = p['E']; }    // SNORCA
+            if (extrude && first_layer >= 0 && type != "Custom" && (nx != x || ny != y)) {                    // SNORCA
+                add(x, y); add(nx, ny);                                                                       // SNORCA
+                if (arc && (p.count('I') || p.count('J'))) {                                                  // SNORCA
+                    const double cx = x + p['I'], cy = y + p['J'], r = std::hypot(p['I'], p['J']);           // SNORCA
+                    add(cx - r, cy - r); add(cx + r, cy + r);                                                 // SNORCA
+                }                                                                                             // SNORCA
+            }                                                                                                 // SNORCA
+            x = nx; y = ny;                                                                                   // SNORCA
+        }                                                                                                     // SNORCA
+    }                                                                                                         // SNORCA
+    if (mesh.empty()) return "no BED_MESH_CALIBRATE before the first layer: file unchanged";                  // SNORCA
+    const bool area = bed == "area";                                                                          // SNORCA
+    const bool define = area && !has_define && maxx >= minx && maxy >= miny;                                  // SNORCA
+    if (area && !has_define && !define) return "no extrusion found: file unchanged";                          // SNORCA
+    char poly[512] = "";                                                                                      // SNORCA
+    if (define)                                                                                               // SNORCA
+        std::snprintf(poly, sizeof(poly), "EXCLUDE_OBJECT_DEFINE NAME=SNORCA_PRINT_AREA CENTER=%.3f,%.3f POLYGON=[[%.3f,%.3f],[%.3f,%.3f],[%.3f,%.3f],[%.3f,%.3f]]", // SNORCA
+                      (minx + maxx) / 2, (miny + maxy) / 2, minx, miny, maxx, miny, maxx, maxy, minx, maxy); // SNORCA
+    const boost::filesystem::path tmp = path.string() + ".snorca-bed";                                          // SNORCA
+    {                                                                                                         // SNORCA
+        std::ifstream in(path.string(), std::ios::binary); std::ofstream out(tmp.string(), std::ios::binary); // SNORCA
+        if (!in || !out) return "could not rewrite the file: unchanged";                                      // SNORCA
+        std::string l; long n = -1; size_t k = 0;                                                             // SNORCA
+        while (std::getline(in, l)) {                                                                         // SNORCA
+            ++n;                                                                                              // SNORCA
+            if (k < mesh.size() && n == mesh[k]) {                                                            // SNORCA
+                ++k;                                                                                          // SNORCA
+                std::string code = strip(l);                                                                  // SNORCA
+                static const std::regex adaptive_re("\\s+ADAPTIVE=\\S*", std::regex::icase);                  // SNORCA
+                code = std::regex_replace(code, adaptive_re, "");                                             // SNORCA
+                out << "; SNORCA print options: bed calibration = " << (area ? "print area only" : "full bed") << "\n"; // SNORCA
+                if (define) out << poly << "\n";                                                              // SNORCA
+                out << code << (area ? " ADAPTIVE=1" : " ADAPTIVE=0") << "\n";                                // SNORCA
+                if (define) out << "EXCLUDE_OBJECT_DEFINE RESET=1\n";                                         // SNORCA
+                continue;                                                                                     // SNORCA
+            }                                                                                                 // SNORCA
+            out << l << '\n';                                                                                 // SNORCA
+        }                                                                                                     // SNORCA
+        if (!out) { out.close(); boost::system::error_code ec2; boost::filesystem::remove(tmp, ec2); return "could not rewrite the file: unchanged"; } // SNORCA
+    }                                                                                                         // SNORCA
+    boost::system::error_code ec; boost::filesystem::rename(tmp, path, ec);                                   // SNORCA
+    if (ec) return "could not replace the file: unchanged";                                                   // SNORCA
+    return std::string(area ? "print area only: ADAPTIVE=1" : "full bed: ADAPTIVE=0") + " on " + std::to_string(mesh.size()) + " line(s)" // SNORCA
+         + (define ? std::string("; outline ") + poly : std::string(has_define && area ? "; the file's own object outlines are used" : "")); // SNORCA
+}                                                                                                             // SNORCA
+
 // 1 = started (printer reports printing), 0 = not started (safe to queue in the inbox), -1 = unknown.       // SNORCA
 int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_fn) const                       // SNORCA
 {                                                                                                             // SNORCA
@@ -330,9 +435,14 @@ int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_f
     const std::string token = rep.contains("token") && rep["token"].is_string() ? rep["token"].get<std::string>() : std::string(); // SNORCA
     if (token.empty()) { reason = "multiACE sent no job token, so nothing was started."; return 0; }          // SNORCA
     // Same body the page sends for its loadout plan with an edited colour->target table; no colour copies,  // SNORCA
-    // print preferences off (the page's defaults).                                                           // SNORCA
+    // camera off. Bed mesh and flow calibration come from the print options window (2026-11-13); without   // SNORCA
+    // that choice they stay off, as before.                                                                  // SNORCA
+    const std::string bed_choice = snorca_choice(up, "snorca_print_bed_calibration");                           // SNORCA
+    const bool bed_mesh = bed_choice == "area" || bed_choice == "full";                                       // SNORCA
+    const bool flow_cal = snorca_choice(up, "snorca_print_flow_calibration") == "1";                            // SNORCA
     const json body = {{"token", token}, {"mode", "head"}, {"head_plan", "loadout"}, {"head_assignment", asn}, // SNORCA
-                       {"head_copies", json::object()}, {"bed_mesh", false}, {"camera", false}, {"flow_cal", false}}; // SNORCA
+                       {"head_copies", json::object()}, {"bed_mesh", bed_mesh}, {"camera", false}, {"flow_cal", flow_cal}}; // SNORCA
+    BOOST_LOG_TRIVIAL(warning) << "multiACE: print options bed=" << (bed_choice.empty() ? "(not asked)" : bed_choice) << " bed_mesh=" << bed_mesh << " flow_cal=" << flow_cal; // SNORCA
     std::string job_id; bool start_ok = false;                                                                // SNORCA
     auto sp = Http::post(make_url("multiace/api/preflight/print")); set_auth(sp);                             // SNORCA
     sp.header("Content-Type", "application/json").set_post_body(body.dump()).timeout_connect(5).timeout_max(120) // SNORCA
@@ -372,6 +482,8 @@ bool MultiACE::upload(PrintHostUpload upload_data, ProgressFn progress_fn, Error
     m_snorca_outcome = SnorcaOutcome();                                                                           // SNORCA
     const std::string snorca_heat = snorca_heat_before_initial_load(upload_data.source_path);                     // SNORCA
     BOOST_LOG_TRIVIAL(warning) << "multiACE: heat before initial load: " << (snorca_heat.empty() ? "pattern not found, file unchanged" : snorca_heat); // SNORCA
+    const std::string snorca_bed = snorca_choice(upload_data, "snorca_print_bed_calibration");                    // SNORCA (2026-11-13)
+    BOOST_LOG_TRIVIAL(warning) << "multiACE: bed calibration: " << snorca_apply_bed_choice(upload_data.source_path, snorca_bed); // SNORCA
     const int snorca = snorca_auto_start(upload_data, progress_fn);                                               // SNORCA
     BOOST_LOG_TRIVIAL(warning) << "multiACE: automatic start result " << snorca << ": " << m_snorca_outcome.reason; // SNORCA
     if (snorca == 1) { m_snorca_outcome.started = true; return true; }                                            // SNORCA

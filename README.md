@@ -2,7 +2,7 @@
 
 **Mnemonic3D Edition.** A slicer for the Snapmaker U1 with the multiACE add-on. It is built on the stock slicer, with the changes below.
 
-> **Status: first test release.** The Linux build is on the [Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases). Windows is being built. [Watch the 2½-minute tour](https://youtu.be/1fYa3H8Mst8).
+> **Status: test release.** Linux and Windows builds are on the [Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases). [Watch the 2½-minute tour](https://youtu.be/1fYa3H8Mst8).
 
 ## What's different from the stock slicer
 
@@ -13,10 +13,25 @@
 | **Getting the list back** | Rebuild it by hand. | One click on the sync button. Painted objects move to the same material in the closest colour. |
 | **Printing ACE colours** | The print window only knows four heads, so two colours can land on the same slot. | Press Print. It spots an ACE job, sends it to multiACE and starts the print. No extra button. |
 | **Picking spools** | You match them yourself on the printer. | Material must match exactly; colour picks the closest and tells you when it is not exact. |
+| **Bed and flow calibration** | The ACE path had no way to ask. | Press Print and pick: probe the print area only, the full bed, or nothing, and whether to calibrate flow. It remembers your choice. *(new in snorca.2)* |
 | **After you press Print** | No clear answer. | A window says "Printing on your printer" with each colour, its name and its ACE slot. |
 | **When a job can't start** | An unclear error. | A plain reason, what the job needs next to what is loaded, and a button that opens the multiACE page. |
 | **Saving settings** | Some line-width and speed boxes do not save. | Every one of those boxes saves into your own profile and survives a restart. |
 | **Sending a job** | Could crash the slicer now and then. | Fixed. |
+
+## New in snorca.2: pick bed and flow calibration when you press Print
+
+![The print options window: bed calibration (print area only, full bed, none) and flow calibration](docs/images/snorca-print-options.png)
+
+When you press Print on an ACE job, this window opens before anything is sent to the printer.
+
+- **Bed calibration:** print area only (quicker), full bed, or none.
+- **Flow calibration:** on or off, for each head the print uses.
+- It remembers what you picked. Cancel sends nothing.
+
+**This fixes a fault in snorca.1:** there, every ACE job started from Print ran with bed calibration and flow calibration switched off, with no way to turn them on. If you use snorca.1 for ACE prints, update.
+
+Tested so far against a simulated printer and by running the printer's own code on the files the slicer sends. Not yet confirmed on a real print; if you try it, please [tell us what happened](https://github.com/Mnemonic3D/Snorca-MultiAce/issues). If your printer's firmware has "Force Bed Mesh" switched on, the printer still probes when you pick "none".
 
 ## Watch the tour
 
@@ -45,8 +60,8 @@ Get them from the **[Releases page](https://github.com/Mnemonic3D/Snorca-MultiAc
 
 | System | Status |
 |---|---|
-| Linux (64-bit) | **Available**: `Snorca-MultiAce-2.3.2-linux-x86_64.tar.xz`. Unpack it and run `AppRun`. |
-| Windows (64-bit) | **Available, new and lightly tested**: `Snorca_MultiAce_Windows_Installer_V2.3.2-fos.8.6.8-snorca.1.exe` (or the portable zip). Read the Windows warnings below first. |
+| Linux (64-bit) | **Available** (snorca.2): the `...linux-x86_64.tar.xz` file. Unpack it and run `AppRun`. |
+| Windows (64-bit) | **Available, new and lightly tested**: the Windows installer `.exe` or the portable `.zip`. Read the Windows warnings below first. The snorca.2 Windows files are added to the release as soon as their build finishes; until then the Windows files are snorca.1, without the print options window. |
 | Mac | Not planned for now |
 
 ## Optional: "ACE" on the printer's touch screen
