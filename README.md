@@ -2,7 +2,7 @@
 
 **Mnemonic3D Edition.** A slicer for the Snapmaker U1 with the multiACE add-on. It is built on the stock slicer, with the changes below.
 
-> **Status: preview page.** Downloads are not up yet. This page shows what is coming. [Watch the 2½-minute tour](https://youtu.be/1fYa3H8Mst8).
+> **Status: first test release.** The Linux build is on the [Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases). Windows is being built. [Watch the 2½-minute tour](https://youtu.be/1fYa3H8Mst8).
 
 ## What's different from the stock slicer
 
@@ -41,11 +41,13 @@ That is the combination it was built and tested on. Older versions have not been
 
 ## Downloads
 
+Get them from the **[Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases)**.
+
 | System | Status |
 |---|---|
-| Linux | Coming first |
-| Windows | Planned |
-| Mac | Planned |
+| Linux (64-bit) | **Available**: `Snorca-MultiAce-2.3.2-linux-x86_64.tar.xz`. Unpack it and run `AppRun`. |
+| Windows | Being built |
+| Mac | Not planned for now |
 
 ## Optional: "ACE" on the printer's touch screen
 
@@ -53,12 +55,12 @@ A separate small patch for the printer. When an ACE is connected to a toolhead a
 
 - It is separate from the slicer. The slicer works without it.
 - It is made for one firmware version (2.0.0, build 24) and switches itself off on any other.
-- Status: built and tried on a test bench. Not yet released.
+- Status: **experimental**. Built and tried on a test bench only; it has never been run on a real printer. It is on the [Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases) with its own instructions.
 
 ## Known limits
 
 - **More than one ACE at once:** the slicer is written to handle it, but it has only been tested with one ACE so far.
-- **Windows and Mac:** not built yet.
+- **Windows:** being built. **Mac:** not planned for now.
 - **Other languages:** some screens still show the old name.
 
 ## Credits
