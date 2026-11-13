@@ -1,0 +1,158 @@
+#include "Exception.hpp"
+#include "Print.hpp"
+#include <boost/log/trivial.hpp>
+
+namespace Slic3r {
+
+// 1-based extruder identifier for this region and role.
+unsigned int PrintRegion::extruder(FlowRole role) const
+{
+    size_t extruder = 0;
+	if (role == frExternalPerimeter)
+        extruder = m_config.wall_filament;
+    else if (role == frPerimeter)
+        extruder = m_config.inner_wall_filament;
+    else if (role == frInfill)
+        extruder = m_config.sparse_infill_filament;
+    else if (role == frSolidInfill || role == frTopSolidInfill)
+        extruder = m_config.solid_infill_filament;
+    else
+        throw Slic3r::InvalidArgument("Unknown role");
+    return extruder;
+}
+
+Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer) const
+{
+    const PrintConfig          &print_config = object.print()->config();
+    ConfigOptionFloatOrPercent config_width;
+    // FOS 8.6: layer 1 takes each slot's OWN authored first layer width. Every slot PRP
+    // authors initial_layer_line_width on its Quality tab; fos_resolve_nozzle_arrays()
+    // resolves them to absolute mm per slot and the stage 1b re-index makes the array
+    // filament-indexed, so here it is read with the printing filament. An IN-RANGE 0 means
+    // that slot authored "0 = use the per-feature widths" and suppresses the global scalar
+    // as well. Only a config with no array at all (pre-8.6 project, no GUI pass) falls back
+    // to the print-scope scalar, ratio-scaled to the printing nozzle further down.
+    bool fos_l1_array   = false;  // the array covers this filament - it governs layer 1
+    bool fos_l1_stamped = false;
+    if (first_layer) {
+        const std::vector<double> &fos_arr = object.config().fos_nozzle_initial_layer_line_width.values;
+        const int fos_idx = int(this->extruder(role)) - 1;
+        if (fos_idx >= 0 && fos_idx < (int) fos_arr.size()) {
+            fos_l1_array = true;
+            if (fos_arr[fos_idx] > 0) {
+                config_width.value   = fos_arr[fos_idx];
+                config_width.percent = false;
+                fos_l1_stamped = true;
+            }
+        }
+    }
+    // Get extrusion width from configuration.
+    // (might be an absolute value, or a percent value, or zero for auto)
+    if (fos_l1_stamped) {
+        // width taken from the slot PRP above
+    } else if (first_layer && !fos_l1_array && print_config.initial_layer_line_width.value > 0) {
+        config_width = print_config.initial_layer_line_width;
+    } else if (role == frExternalPerimeter) {
+        config_width = m_config.outer_wall_line_width;
+    } else if (role == frPerimeter) {
+        config_width = m_config.inner_wall_line_width;
+    } else if (role == frInfill) {
+        config_width = m_config.sparse_infill_line_width;
+    } else if (role == frSolidInfill) {
+        config_width = m_config.internal_solid_infill_line_width;
+    } else if (role == frTopSolidInfill) {
+        config_width = m_config.top_surface_line_width;
+    } else {
+        throw Slic3r::InvalidArgument("Unknown role");
+    }
+
+    if (config_width.value == 0)
+        config_width = object.config().line_width;
+
+    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(this->extruder(role) - 1));
+
+    // FOS 8.6: LEGACY fallback only - a config whose fos_nozzle_initial_layer_line_width
+    // array is absent (pre-8.6 project, no GUI pass) still carries the print-scope scalar,
+    // authored against physical nozzle 1; ratio-scale it to the printing filament's nozzle
+    // (proven live before the fix: 0.25 mm through the 0.8 head on a 2468). When the array
+    // covered this filament the width is already the slot's own authored value and this
+    // must not run on top of it.
+    if (first_layer && !fos_l1_array && print_config.initial_layer_line_width.value > 0)
+        config_width = fos_width_for_nozzle(config_width, print_config, nozzle_diameter);
+
+    // FOS 8.5: the 8.4 mixed-nozzle width ratio was REMOVED here. Per-nozzle widths are now
+    // authored per slot and resolved to absolute mm at config materialization
+    // (fos_stamp_per_nozzle_region), so config_width already carries the correct width for the
+    // actual extruder. Re-deriving by ratio here would double-apply. In uniform-nozzle mode the
+    // old block was a no-op (has_mixed_nozzle_sizes false), so this is byte-identical there.
+
+    // FOS: painted/color-patch regions carry the painted extruder in wall_filament etc, but their
+    // width scalars still hold the BASE region stamped values -- fos_stamp_per_nozzle_region ran
+    // before segmentation overrode the extruder, and was not re-run. 8.4 PrintRegion::flow masked
+    // this with a nozzle ratio; 8.5 removed it (color-patch width regression; correct at fos.8.1).
+    // Re-resolve width from the per-nozzle array indexed by the ACTUAL printing extruder so a
+    // painted loop gets its nozzle authored width. Feature regions: extruder(role) == the stamped
+    // filament, so this is a no-op. First layer takes the ratio-scale above instead of this block.
+    if (print_config.has_mixed_nozzle_sizes.value && !(first_layer && print_config.initial_layer_line_width.value > 0)) {
+        const int fos_idx = int(this->extruder(role)) - 1;
+        const ConfigOptionFloats *fos_arr =
+            (role == frExternalPerimeter) ? &m_config.fos_nozzle_outer_wall_line_width :
+            (role == frPerimeter)         ? &m_config.fos_nozzle_inner_wall_line_width :
+            (role == frInfill)            ? &m_config.fos_nozzle_sparse_infill_line_width :
+            (role == frSolidInfill)       ? &m_config.fos_nozzle_internal_solid_infill_line_width :
+            (role == frTopSolidInfill)    ? &m_config.fos_nozzle_top_surface_line_width : nullptr;
+        if (fos_arr != nullptr && fos_idx >= 0 && fos_idx < (int)fos_arr->values.size()
+            && fos_arr->values[fos_idx] > 0) {
+            config_width.value   = fos_arr->values[fos_idx];
+            config_width.percent = false;
+        }
+    }
+    return Flow::new_from_config_width(role, config_width, nozzle_diameter, float(layer_height));
+}
+
+coordf_t PrintRegion::nozzle_dmr_avg(const PrintConfig &print_config) const
+{
+    return (print_config.nozzle_diameter.get_at(m_config.wall_filament.value    - 1) + 
+            print_config.nozzle_diameter.get_at(m_config.sparse_infill_filament.value       - 1) + 
+            print_config.nozzle_diameter.get_at(m_config.solid_infill_filament.value - 1)) / 3.;
+}
+
+coordf_t PrintRegion::bridging_height_avg(const PrintConfig &print_config) const
+{
+    return this->nozzle_dmr_avg(print_config) * sqrt(m_config.bridge_flow.value);
+}
+
+void PrintRegion::collect_object_printing_extruders(const PrintConfig &print_config, const PrintRegionConfig &region_config, const bool has_brim, std::vector<unsigned int> &object_extruders)
+{
+    // These checks reflect the same logic used in the GUI for enabling/disabling extruder selection fields.
+    // BBS
+    auto num_extruders = (int)print_config.filament_diameter.size();
+    auto emplace_extruder = [num_extruders, &object_extruders](int extruder_id) {
+    	int i = std::max(0, extruder_id - 1);
+        object_extruders.emplace_back((i >= num_extruders) ? 0 : i);
+    };
+    if (region_config.wall_loops.value > 0 || has_brim) {
+    	emplace_extruder(region_config.wall_filament);
+    	emplace_extruder(region_config.inner_wall_filament);
+    }
+    if (region_config.sparse_infill_density.value > 0)
+    	emplace_extruder(region_config.sparse_infill_filament);
+    if (region_config.top_shell_layers.value > 0 || region_config.bottom_shell_layers.value > 0)
+    	emplace_extruder(region_config.solid_infill_filament);
+}
+
+void PrintRegion::collect_object_printing_extruders(const Print &print, std::vector<unsigned int> &object_extruders) const
+{
+    // PrintRegion, if used by some PrintObject, shall have all the extruders set to an existing printer extruder.
+    // If not, then there must be something wrong with the Print::apply() function.
+#ifndef NDEBUG
+    // BBS
+    auto num_extruders = int(print.config().filament_diameter.size());
+    assert(this->config().wall_filament    <= num_extruders);
+    assert(this->config().sparse_infill_filament       <= num_extruders);
+    assert(this->config().solid_infill_filament <= num_extruders);
+#endif
+    collect_object_printing_extruders(print.config(), this->config(), print.has_brim(), object_extruders);
+}
+
+}

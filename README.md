@@ -70,3 +70,9 @@ Built on the work of the OrcaSlicer and FOrcaSlicer projects, the multiACE add-o
 ## Licence
 
 Open source, under the same licence as the slicer it is built on.
+
+## Source and building
+
+This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top.
+The upstream build instructions are kept in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md).
+The Windows and Linux builds run on GitHub's machines from `.github/workflows/` and start only when someone presses "Run workflow".

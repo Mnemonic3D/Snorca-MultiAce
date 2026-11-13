@@ -1,0 +1,156 @@
+name: Build Windows installer and portable zip
+
+# Snorca MultiAce: Windows x64 build on GitHub's own Windows machines.
+# MANUAL ONLY: runs only when someone presses "Run workflow" in the Actions tab
+# (or: gh workflow run build_windows.yml). No push, tag or schedule trigger.
+# No secrets are used. Nothing is published: the results are workflow artifacts
+# (kept 30 days); attaching them to a Release is a separate, manual step.
+#
+# Same steps as the upstream Windows instructions (README "Build from source",
+# build_release_vs2022.bat, build_installer.ps1):
+#   1. deps job   : build_release_vs2022.bat deps   (long; cached afterwards)
+#   2. slicer job : build_release_vs2022.bat slicer, then build_installer.ps1
+#                   -> NSIS installer .exe + portable .zip
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version text used in the file names (for example 2.3.2-fos.8.6.8-snorca.1)"
+        required: true
+        default: "2.3.2-fos.8.6.8-snorca.1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deps:
+    name: dependencies (VS 2022, x64, Release)
+    runs-on: windows-latest
+    timeout-minutes: 350
+    outputs:
+      key: ${{ steps.depkey.outputs.key }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Hash the dependency recipes once, on the clean checkout.
+      - name: Compute dependency cache key
+        id: depkey
+        shell: bash
+        run: echo "key=snorcadeps-win64-vs2022-${{ hashFiles('deps/**/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/*.patch') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore dependency cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/build/OrcaSlicer_dep
+          key: ${{ steps.depkey.outputs.key }}
+          lookup-only: true
+
+      # OpenSSL's Windows build needs a full Perl; the README asks for Strawberry Perl.
+      - name: Install Strawberry Perl
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          choco install strawberryperl -y --no-progress
+          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "C:\Strawberry\c\bin"    | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version [17.0^,18.0^) -property installationPath`) do set VSPATH=%%i
+          if not defined VSPATH (echo Visual Studio 2022 not found on this runner & exit /b 1)
+          call "%VSPATH%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64
+          perl -v | findstr /i "strawberry"
+          cmake --version
+          call build_release_vs2022.bat deps
+          if not exist deps\build\OrcaSlicer_dep\usr\local (echo dependency prefix missing & exit /b 1)
+
+      - name: Save dependency cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/build/OrcaSlicer_dep
+          key: ${{ steps.depkey.outputs.key }}
+
+  slicer:
+    name: slicer, installer and portable zip
+    needs: deps
+    runs-on: windows-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/build/OrcaSlicer_dep
+          key: ${{ needs.deps.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Build slicer
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version [17.0^,18.0^) -property installationPath`) do set VSPATH=%%i
+          if not defined VSPATH (echo Visual Studio 2022 not found on this runner & exit /b 1)
+          call "%VSPATH%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64
+          call build_release_vs2022.bat slicer
+          if not exist build\Snapmaker_Orca\FOrcaSlicer.exe (echo FOrcaSlicer.exe missing after install & dir build & exit /b 1)
+
+      # NSIS is preinstalled on windows-2022 but not listed for windows-2025 (windows-latest).
+      - name: Make sure NSIS is present
+        shell: pwsh
+        run: |
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress }
+          if (-not (Test-Path $nsis)) { throw "makensis not found" }
+          & $nsis /VERSION
+
+      - name: Build installer and portable zip
+        shell: pwsh
+        run: |
+          .\build_installer.ps1 -Version "${{ inputs.version }}" -SourceDir .\build\Snapmaker_Orca -OutDir .\dist
+          Get-ChildItem dist | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)" | Out-File -FilePath "$($_.FullName).sha256" -Encoding ascii
+            "$h  $($_.Name)"
+          }
+
+      # Payload check (warning only, so a long build is never thrown away by it).
+      - name: Check payload
+        shell: pwsh
+        run: |
+          $exe = "build\Snapmaker_Orca\FOrcaSlicer.exe"
+          $core = Get-ChildItem build\Snapmaker_Orca -Filter "FOrcaSlicer*.dll" | Select-Object -First 1
+          $files = @($exe) + @($core.FullName | Where-Object { $_ })
+          $found = $false
+          foreach ($f in $files) { if (Select-String -Path $f -Pattern "Snorca MultiAce" -SimpleMatch -Quiet) { $found = $true } }
+          if ($found) { "payload contains 'Snorca MultiAce'" } else { "::warning::the text 'Snorca MultiAce' was not found as plain text in the built program (it may be stored as wide text); check the About box by hand" }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Snorca_MultiAce_Windows_Installer_V${{ inputs.version }}
+          path: |
+            dist/*.exe
+            dist/*.exe.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Snorca_MultiAce_Windows_Portable_V${{ inputs.version }}
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

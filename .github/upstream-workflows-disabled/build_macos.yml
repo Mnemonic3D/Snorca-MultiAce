@@ -1,0 +1,274 @@
+name: Build macOS release
+
+# FOS: RELEASE build - universal (x86_64 + arm64) DMG, version-named from
+# FOS_VERSION in common_func.hpp. For quick iteration use build_macos_x86.yml
+# instead: single arch, single job, roughly half the compile.
+#
+# Snapmaker stripped upstream Orca's build
+# workflows, so this is authored against THIS tree's build_release_macos.sh
+# rather than adapted from upstream's CI (their script differs: deployment
+# target 12.0 not 11.3, staging dir FOrcaSlicer not OrcaSlicer).
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_config:
+        description: "CMake build configuration"
+        required: false
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - RelWithDebInfo
+          - Debug
+  # FOS: MANUAL ONLY - no push trigger. Mac builds are release events, not
+  # per-commit CI: dep caches are warm but the slicer itself is recompiled in
+  # full (twice, for universal) on every run, with no ccache.
+  #
+  # The "Run workflow" button reads this file from the DEFAULT branch
+  # (fos-8.5), but its branch selector can then target ANY branch that also
+  # has this file committed. To build clean-main, cherry-pick this file there
+  # too - and push that branch first: CI builds the REMOTE, and remote
+  # clean-main is still fos.8.1-era.
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_CONFIG: ${{ inputs.build_config || 'Release' }}
+  OSX_DEPLOYMENT_TARGET: "12.0"
+  # FOS: CMake 4.x removed compatibility with cmake_minimum_required(<3.5).
+  # deps/CMakeLists.txt:23 declares 3.2, and the vendored dep sources declare
+  # older still (Blosc 3.1, boost/compute 2.8, zlib 2.4.4), so patching one
+  # line would only move the failure downstream. Pin to the project's
+  # documented max (CLAUDE.md: "minimum 3.13, maximum 3.31.x").
+  CMAKE_PIN: "3.31.6"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Stage 1: build each arch's dependency tree once and cache the install
+  # prefix. Runs the two arches on separate runners so neither approaches
+  # the 6h job ceiling on a cold cache.
+  # ---------------------------------------------------------------------
+  deps:
+    name: deps (${{ matrix.arch }})
+    runs-on: macos-14
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # FOS: MUST run before any actions/cache step. actions/cache derives its
+      # entry "version" from the path list PLUS the compression method, and it
+      # picks the method by probing for zstd at the moment it runs. Removing
+      # Homebrew zstd mid-job (needed - Orca's deps build collides with it on
+      # the include path) made the deps job RESTORE as zstd but SAVE as gzip,
+      # so every later lookup missed on version despite an identical key.
+      # Uninstalling up front makes every cache action in every job agree on
+      # gzip. See the s59 CI notes.
+      - name: Remove Homebrew zstd (before any cache action)
+        run: brew uninstall --ignore-dependencies zstd || true
+
+      # FOS: compute the dep-recipe hash ONCE, on the clean checkout, and reuse
+      # it for every cache action in this job. hashFiles() is re-evaluated at
+      # each step against the LIVE workspace, and a restored dep prefix drops
+      # hundreds of *.cmake files into deps/build/**. That made restore #1
+      # change the key seen by restore #2, so the second lookup missed on a key
+      # that was never stored. The !deps/build/** exclusion is belt-and-braces:
+      # on a clean tree it matches nothing and the hash is unchanged.
+      - name: Compute dep cache key
+        id: depkey
+        run: echo "hash=${{ hashFiles('deps/**/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/*.patch', '!deps/build/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dependency install prefix
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: deps/build/${{ matrix.arch }}/OrcaSlicer_dep
+          key: fosdeps-${{ matrix.arch }}-${{ env.OSX_DEPLOYMENT_TARGET }}-${{ env.BUILD_CONFIG }}-${{ steps.depkey.outputs.hash }}
+
+      - name: Install pinned CMake ${{ env.CMAKE_PIN }}
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/cmake.tar.gz" \
+            "https://cmake.org/files/v3.31/cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          tar -xzf "$RUNNER_TEMP/cmake.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/cmake-${CMAKE_PIN}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+
+      - name: Install build prerequisites
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          # cmake omitted deliberately - brew ships 4.x; the pinned 3.31.x above
+          # is prepended to PATH via GITHUB_PATH and wins.
+          # zstd is removed in an earlier step, before the cache action.
+          brew install ninja automake autoconf libtool texinfo gettext
+
+      - name: Build dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          which cmake && cmake --version
+          chmod +x ./build_release_macos.sh || true
+          ./build_release_macos.sh \
+            -d \
+            -a "${{ matrix.arch }}" \
+            -t "$OSX_DEPLOYMENT_TARGET" \
+            -c "$BUILD_CONFIG"
+
+      - name: Report dependency prefix size
+        run: du -sh "deps/build/${{ matrix.arch }}/OrcaSlicer_dep" || true
+
+  # ---------------------------------------------------------------------
+  # Stage 2: restore both prefixes, build the slicer for both arches, and
+  # let the script's own build_universal() lipo them together.
+  # ---------------------------------------------------------------------
+  build:
+    name: build universal
+    needs: deps
+    runs-on: macos-14
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # FOS: MUST run before any actions/cache step. actions/cache derives its
+      # entry "version" from the path list PLUS the compression method, and it
+      # picks the method by probing for zstd at the moment it runs. Removing
+      # Homebrew zstd mid-job (needed - Orca's deps build collides with it on
+      # the include path) made the deps job RESTORE as zstd but SAVE as gzip,
+      # so every later lookup missed on version despite an identical key.
+      # Uninstalling up front makes every cache action in every job agree on
+      # gzip. See the s59 CI notes.
+      - name: Remove Homebrew zstd (before any cache action)
+        run: brew uninstall --ignore-dependencies zstd || true
+
+      # FOS: compute the dep-recipe hash ONCE, on the clean checkout, and reuse
+      # it for every cache action in this job. hashFiles() is re-evaluated at
+      # each step against the LIVE workspace, and a restored dep prefix drops
+      # hundreds of *.cmake files into deps/build/**. That made restore #1
+      # change the key seen by restore #2, so the second lookup missed on a key
+      # that was never stored. The !deps/build/** exclusion is belt-and-braces:
+      # on a clean tree it matches nothing and the hash is unchanged.
+      - name: Compute dep cache key
+        id: depkey
+        run: echo "hash=${{ hashFiles('deps/**/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/*.patch', '!deps/build/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore x86_64 dependency prefix
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/build/x86_64/OrcaSlicer_dep
+          key: fosdeps-x86_64-${{ env.OSX_DEPLOYMENT_TARGET }}-${{ env.BUILD_CONFIG }}-${{ steps.depkey.outputs.hash }}
+          fail-on-cache-miss: true
+
+      - name: Restore arm64 dependency prefix
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/build/arm64/OrcaSlicer_dep
+          key: fosdeps-arm64-${{ env.OSX_DEPLOYMENT_TARGET }}-${{ env.BUILD_CONFIG }}-${{ steps.depkey.outputs.hash }}
+          fail-on-cache-miss: true
+
+      - name: Install pinned CMake ${{ env.CMAKE_PIN }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/cmake.tar.gz" \
+            "https://cmake.org/files/v3.31/cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          tar -xzf "$RUNNER_TEMP/cmake.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/cmake-${CMAKE_PIN}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+
+      - name: Install build prerequisites
+        run: |
+          brew install ninja automake autoconf libtool texinfo gettext
+          # gettext is keg-only; build_slicer() calls scripts/run_gettext.sh,
+          # which needs msgfmt on PATH.
+          echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+
+      - name: Build slicer (universal)
+        run: |
+          which cmake && cmake --version
+          chmod +x ./build_release_macos.sh ./scripts/run_gettext.sh || true
+          ./build_release_macos.sh \
+            -s \
+            -a universal \
+            -t "$OSX_DEPLOYMENT_TARGET" \
+            -c "$BUILD_CONFIG"
+
+      - name: Verify universal binary
+        run: |
+          APP="build/universal/FOrcaSlicer/FOrcaSlicer.app"
+          test -d "$APP" || { echo "::error::app bundle missing at $APP"; exit 1; }
+          lipo -archs "$APP/Contents/MacOS/FOrcaSlicer"
+          lipo -archs "$APP/Contents/MacOS/FOrcaSlicer" | grep -q x86_64
+          lipo -archs "$APP/Contents/MacOS/FOrcaSlicer" | grep -q arm64
+
+      # FOS: build_universal() copies the ARM64 bundle wholesale and lipos only
+      # the main binary, crashpad_handler and libsentry.dylib. Any other Mach-O
+      # payload stays arm64-only and the app dies on an Intel Mac. Enumerate
+      # every Mach-O so that failure shows up here, not on the test machine.
+      - name: Audit bundle architectures
+        run: |
+          APP="build/universal/FOrcaSlicer/FOrcaSlicer.app"
+          : > /tmp/fos_archs.txt
+          find "$APP" -type f | while IFS= read -r f; do
+            file -b "$f" | grep -q 'Mach-O' || continue
+            printf '%s\t%s\n' "$(lipo -archs "$f" 2>/dev/null || echo unknown)" "${f#"$APP"/}" >> /tmp/fos_archs.txt
+          done
+          echo "=== every Mach-O in the bundle ($(wc -l < /tmp/fos_archs.txt) files) ==="
+          sort /tmp/fos_archs.txt
+          echo
+          echo "=== MISSING x86_64 - these break the app on an Intel Mac ==="
+          if grep -v 'x86_64' /tmp/fos_archs.txt > /tmp/fos_nox86.txt; then
+            cat /tmp/fos_nox86.txt
+            echo "::warning::$(wc -l < /tmp/fos_nox86.txt) Mach-O file(s) lack x86_64 - fix is in build_universal(), not in CI"
+          else
+            echo "none - every Mach-O carries x86_64"
+          fi
+          echo
+          echo "=== MISSING arm64 (informational - untestable on your hardware) ==="
+          grep -v 'arm64' /tmp/fos_archs.txt || echo "none - every Mach-O carries arm64"
+
+      # FOS: name the artifact from FOS_VERSION so the DMG matches the release
+      # tag, with the short sha kept for traceability.
+      - name: Compute version
+        id: ver
+        run: |
+          FOS_VER=$(sed -n 's/.*FOS_VERSION "\(.*\)".*/\1/p' src/common_func/common_func.hpp)
+          test -n "$FOS_VER" || { echo "::error::could not read FOS_VERSION"; exit 1; }
+          echo "ver=$FOS_VER"               >> "$GITHUB_OUTPUT"
+          echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "building $FOS_VER ($(git rev-parse --short HEAD))"
+
+      - name: Package DMG
+        run: |
+          STAGE="$(mktemp -d)/FOrcaSlicer"
+          mkdir -p "$STAGE"
+          cp -R "build/universal/FOrcaSlicer/FOrcaSlicer.app" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          # strip inherited quarantine from the runner before imaging
+          xattr -cr "$STAGE/FOrcaSlicer.app" || true
+          hdiutil create \
+            -volname "FOrcaSlicer ${{ steps.ver.outputs.ver }}" \
+            -srcfolder "$STAGE" \
+            -ov -format UDZO -imagekey zlib-level=9 \
+            "FOrcaSlicer-${{ steps.ver.outputs.ver }}-macos-universal.dmg"
+          ls -lh FOrcaSlicer-*.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: FOrcaSlicer-${{ steps.ver.outputs.ver }}-macos-universal
+          path: FOrcaSlicer-*-macos-universal.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload dSYM
+        uses: actions/upload-artifact@v4
+        with:
+          name: FOrcaSlicer-${{ steps.ver.outputs.ver }}-macos-dSYM-${{ steps.ver.outputs.tag }}
+          path: build/universal/FOrcaSlicer/dSYM
+          if-no-files-found: warn
+          retention-days: 14
