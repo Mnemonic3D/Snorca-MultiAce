@@ -30,7 +30,7 @@ concurrency:
 jobs:
   deps:
     name: dependencies (VS 2022, x64, Release)
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 350
     outputs:
       key: ${{ steps.depkey.outputs.key }}
@@ -83,7 +83,7 @@ jobs:
   slicer:
     name: slicer, installer and portable zip
     needs: deps
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 350
     steps:
       - name: Checkout
