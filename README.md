@@ -8,6 +8,8 @@ It makes ACE colour printing on the U1 simple: pick your printer, the slicer rea
 
 **[Download (Linux and Windows)](https://github.com/Mnemonic3D/Snorca-MultiAce/releases)** · **[Watch the 2½-minute tour](https://youtu.be/1fYa3H8Mst8)** · **[Report a problem](https://github.com/Mnemonic3D/Snorca-MultiAce/issues)**
 
+**Get the updates as they come:** star and watch this repository, and follow and like [Mnemonic ThreeDs on Facebook](https://www.facebook.com/profile.php?id=61565356706003) and [Mnemonic3D on YouTube](https://youtube.com/@Mnemonic3D).
+
 ---
 
 ## What it does
