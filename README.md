@@ -61,7 +61,7 @@ Get them from the **[Releases page](https://github.com/Mnemonic3D/Snorca-MultiAc
 | System | Status |
 |---|---|
 | Linux (64-bit) | **Available** (snorca.2): the `...linux-x86_64.tar.xz` file. Unpack it and run `AppRun`. |
-| Windows (64-bit) | **Available, new and lightly tested**: the Windows installer `.exe` or the portable `.zip`. Read the Windows warnings below first. The snorca.2 Windows files are added to the release as soon as their build finishes; until then the Windows files are snorca.1, without the print options window. |
+| Windows (64-bit) | **Available, new and lightly tested**: the Windows installer `.exe` or the portable `.zip`. Read the Windows warnings below first. The snorca.2 Windows files have the print options window but have not been run yet; the Windows testing was done on snorca.1. |
 | Mac | Not planned for now |
 
 ## Optional: "ACE" on the printer's touch screen
