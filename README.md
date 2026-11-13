@@ -46,7 +46,7 @@ Get them from the **[Releases page](https://github.com/Mnemonic3D/Snorca-MultiAc
 | System | Status |
 |---|---|
 | Linux (64-bit) | **Available**: `Snorca-MultiAce-2.3.2-linux-x86_64.tar.xz`. Unpack it and run `AppRun`. |
-| Windows | Being built |
+| Windows (64-bit) | **Available, new and lightly tested**: `Snorca_MultiAce_Windows_Installer_V2.3.2-fos.8.6.8-snorca.1.exe` (or the portable zip). Read the Windows warnings below first. |
 | Mac | Not planned for now |
 
 ## Optional: "ACE" on the printer's touch screen
@@ -60,8 +60,13 @@ A separate small patch for the printer. When an ACE is connected to a toolhead a
 ## Known limits
 
 - **More than one ACE at once:** the slicer is written to handle it, but it has only been tested with one ACE so far.
-- **Windows:** being built. **Mac:** not planned for now.
+- **Windows:** new. It has only been tried in a Windows 11 test machine against a simulated printer, not on a real Windows PC or a real printer. The installer is unsigned, so Windows shows an "unknown publisher" warning. A few places still show the old name (FOrcaSlicer), and it shares the FOrcaSlicer settings folder if you have that installed too. The portable zip has not been run at all. Full list on the [Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases).
+- **Mac:** not planned for now.
 - **Other languages:** some screens still show the old name.
+
+## Found a problem?
+
+Please [open an issue](https://github.com/Mnemonic3D/Snorca-MultiAce/issues). Say which download you used, your printer firmware and multiACE version, what you clicked and what happened. A screenshot helps.
 
 ## Credits
 
