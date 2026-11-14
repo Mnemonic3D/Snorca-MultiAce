@@ -266,7 +266,7 @@ static void handle_newer_3mf_schema(wxWindow* parent,
                             << ": file_version=" << file_schema
                             << ", supported_version=" << definition.current_version;
     show_info(parent,
-              _L("The current version of Snapmaker Orca cannot fully load this 3MF file. Please update to the latest version and try again."),
+              _L("The current version of Snorca MultiAce cannot fully load this 3MF file. Please update to the latest version and try again."),
               _L("Loading 3MF"));
 }
 
@@ -9371,7 +9371,7 @@ void Sidebar::sync_ams_list()
     wxGetApp().app_config ->set("ams_filament_ids", p->ams_list_device, ams_filament_ids);
     if (unknowns > 0) {
         MessageDialog dlg(this,
-            _L("There are some unknown filaments mapped to generic preset. Please update Snapmaker Orca or restart Snapmaker Orca to check if there is an update to system presets."),
+            _L("There are some unknown filaments mapped to generic preset. Please update Snorca MultiAce or restart Snorca MultiAce to check if there is an update to system presets."),
             _L("Sync filaments with AMS"), wxOK);
         dlg.ShowModal();
     }
@@ -12651,7 +12651,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         // do not reset the model config
                         load_config = false;
                         if(load_type != LoadType::LoadGeometry)
-                            show_info(q, _L("The 3mf is not supported by Snapmaker Orca, load geometry data only."), _L("Load 3mf"));
+                            show_info(q, _L("The 3mf is not supported by Snorca MultiAce, load geometry data only."), _L("Load 3mf"));
                     }
                     // else if (load_config && (file_version.maj() != app_version.maj())) {
                     //     // version mismatch, only load geometries
@@ -12693,7 +12693,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                       "infill rotation template settings that may not work properly with your current infill pattern. "
                                       "This could result in weak support or print quality issues."));
                                 msg_text += "\n\n" +
-                                            _(L("Would you like Snapmaker Orca to automatically fix this by clearing the rotation template settings?"));
+                                            _(L("Would you like Snorca MultiAce to automatically fix this by clearing the rotation template settings?"));
                                 MessageDialog dialog(wxGetApp().plater(), msg_text, "", wxICON_WARNING | wxYES | wxNO);
                                 dialog.SetButtonLabel(wxID_YES, _L("Yes"));
                                 dialog.SetButtonLabel(wxID_NO, _L("No"));
@@ -18888,7 +18888,7 @@ void Plater::import_model_id(wxString download_info)
                         error);
 
                     if (retry_count == max_retries) {
-                        msg = _L("Importing to Snapmaker Orca failed. Please download the file and manually import it.");
+                        msg = _L("Importing to Snorca MultiAce failed. Please download the file and manually import it.");
                         cont = false;
                     }
                 })
@@ -26064,7 +26064,7 @@ void Plater::show_object_info()
 
     #ifndef __WINDOWS__
     if (non_manifold_edges > 0) {
-        info_manifold += into_u8("\n" + _L("Tips:") + "\n" +_L("\"Fix Model\" feature is currently only on Windows. Please repair the model on Snapmaker Orca(windows) or CAD softwares."));
+        info_manifold += into_u8("\n" + _L("Tips:") + "\n" +_L("\"Fix Model\" feature is currently only on Windows. Please repair the model on Snorca MultiAce(windows) or CAD softwares."));
     }
     #endif //APPLE & LINUX
 

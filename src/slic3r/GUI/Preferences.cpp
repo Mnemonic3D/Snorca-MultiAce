@@ -977,7 +977,7 @@ wxWindow *PreferencesDialog ::create_item_radiobox(wxString title, wxWindow *par
 wxBoxSizer* PreferencesDialog::create_item_link_association(wxWindow* parent, wxString url_prefix, wxString website_name)
 {
     wxString title = _L("Associate") + (boost::format(" %1%://") % url_prefix.c_str()).str();
-    wxString tooltip = _L("Associate") + " " + url_prefix + ":// " + _L("with Snapmaker Orca so that Orca can open models from") + " " + website_name;
+    wxString tooltip = _L("Associate") + " " + url_prefix + ":// " + _L("with Snorca MultiAce so that Orca can open models from") + " " + website_name;
 
     std::wstring registered_bin; // not used, just here to provide a ref to check fn
     bool reg_to_current_instance = wxGetApp().check_url_association(url_prefix.ToStdWstring(), registered_bin);
@@ -1248,12 +1248,12 @@ wxWindow* PreferencesDialog::create_general_page()
         const int choice=event.GetSelection();if(choice>=0&&size_t(choice)<snorca_scales.size()){app_config->set("snorca_interface_text_scale",snorca_scales[choice]);app_config->save();}event.Skip();
     });
 
-    auto item_single_instance = create_item_checkbox(_L("Allow only one Snapmaker Orca instance"), page,
+    auto item_single_instance = create_item_checkbox(_L("Allow only one Snorca MultiAce instance"), page,
     #if __APPLE__
             _L("On OSX there is always only one instance of app running by default. However it is allowed to run multiple instances "
                 "of same app from the command line. In such case this settings will allow only one instance."),
     #else
-            _L("If this is enabled, when starting Snapmaker Orca and another instance of the same Snapmaker Orca is already running, that instance will be reactivated instead."),
+            _L("If this is enabled, when starting Snorca MultiAce and another instance of the same Snorca MultiAce is already running, that instance will be reactivated instead."),
     #endif
             50, "single_instance");
 
@@ -1354,7 +1354,7 @@ wxWindow* PreferencesDialog::create_general_page()
     auto item_calc_in_long_retract = create_item_checkbox(_L("Flushing volumes: Auto-calculate every time when the filament is changed."), page, _L("If enabled, auto-calculate every time when filament is changed"), 50, "auto_calculate_when_filament_change");
     auto item_remember_printer_config = create_item_checkbox(_L("Remember printer configuration"), page, _L("If enabled, Orca will remember and switch filament/process configuration for each printer automatically."), 50, "remember_printer_config");
     auto item_step_mesh_setting = create_item_checkbox(_L("Show the step mesh parameter setting dialog."), page, _L("If enabled,a parameter settings dialog will appear during STEP file import."), 50, "enable_step_mesh_setting");
-    auto item_multi_machine = create_item_checkbox(_L("Multi-device Management (Take effect after restarting Snapmaker Orca)."), page, _L("With this option enabled, you can send a task to multiple devices at the same time and manage multiple devices."), 50, "enable_multi_machine");
+    auto item_multi_machine = create_item_checkbox(_L("Multi-device Management (Take effect after restarting Snorca MultiAce)."), page, _L("With this option enabled, you can send a task to multiple devices at the same time and manage multiple devices."), 50, "enable_multi_machine");
     auto item_auto_arrange  = create_item_checkbox(_L("Auto arrange plate after cloning"), page, _L("Auto arrange plate after object cloning"), 50, "auto_arrange");
 
     auto item_gcode_gpu_accel = create_item_checkbox(_L("GPU-accelerated G-code preview"), page,
@@ -1368,17 +1368,17 @@ wxWindow* PreferencesDialog::create_general_page()
     });
 
 #ifdef _WIN32
-    auto title_associate_file = create_item_title(_L("Associate files to Snapmaker Orca"), page, _L("Associate files to Snapmaker Orca"));
+    auto title_associate_file = create_item_title(_L("Associate files to Snorca MultiAce"), page, _L("Associate files to Snorca MultiAce"));
 
     // associate file
-    auto item_associate_3mf  = create_item_checkbox(_L("Associate .3mf files to Snapmaker Orca"), page,
-                                                        _L("If enabled, sets Snapmaker Orca as default application to open .3mf files"), 50, "associate_3mf");
-    auto item_associate_stl  = create_item_checkbox(_L("Associate .stl files to Snapmaker Orca"), page,
-                                                        _L("If enabled, sets Snapmaker Orca as default application to open .stl files"), 50, "associate_stl");
-    auto item_associate_step = create_item_checkbox(_L("Associate .step/.stp files to Snapmaker Orca"), page,
-                                                         _L("If enabled, sets Snapmaker Orca as default application to open .step files"), 50, "associate_step");
+    auto item_associate_3mf  = create_item_checkbox(_L("Associate .3mf files to Snorca MultiAce"), page,
+                                                        _L("If enabled, sets Snorca MultiAce as default application to open .3mf files"), 50, "associate_3mf");
+    auto item_associate_stl  = create_item_checkbox(_L("Associate .stl files to Snorca MultiAce"), page,
+                                                        _L("If enabled, sets Snorca MultiAce as default application to open .stl files"), 50, "associate_stl");
+    auto item_associate_step = create_item_checkbox(_L("Associate .step/.stp files to Snorca MultiAce"), page,
+                                                         _L("If enabled, sets Snorca MultiAce as default application to open .step files"), 50, "associate_step");
 
-    auto title_associate_url = create_item_title(_L("Associate web links to Snapmaker Orca"), page, _L("Associate URLs to Snapmaker Orca"));
+    auto title_associate_url = create_item_title(_L("Associate web links to Snorca MultiAce"), page, _L("Associate URLs to Snorca MultiAce"));
 
     auto associate_url_prusaslicer = create_item_link_association(page, L"prusaslicer", "Printables.com");
     auto associate_url_bambustudio = create_item_link_association(page, L"bambustudio", "Makerworld.com");
