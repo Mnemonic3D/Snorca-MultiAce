@@ -134,25 +134,49 @@ static std::vector<std::string> snorca_filament_keys(const ModelConfig& c) // SN
     return keys; // SNORCA
 } // SNORCA
 // SNORCA (2026-11-12): 0-based filament rows used by objects: object/part/layer-range filament settings, painted colours.
+// SNORCA (2026-11-14): the physical filaments (1-based) a mixed filament prints with: its pattern tokens when it has a
+// pattern, else its gradient components, else its pair (same order upstream resolves them in). // SNORCA
+static std::vector<unsigned> snorca_mixed_components(const MixedFilament& mf,size_t n_physical) // SNORCA
+{ // SNORCA
+    std::vector<unsigned> ids; // SNORCA
+    const std::string norm=MixedFilamentManager::normalize_manual_pattern(mf.manual_pattern); // SNORCA
+    if(!norm.empty()){for(const auto& g:MixedFilamentManager::split_pattern_groups(norm))for(const auto& t:MixedFilamentManager::split_pattern_group_to_tokens(g,n_physical)) // SNORCA
+        ids.push_back(MixedFilamentManager::physical_filament_from_token(t,mf,n_physical));return ids;} // SNORCA
+    ids=MixedFilamentManager::decode_gradient_component_ids(mf.gradient_component_ids,0); // SNORCA
+    ids.push_back(mf.component_a);ids.push_back(mf.component_b);return ids; // SNORCA
+} // SNORCA
 static nlohmann::json snorca_used_rows() // SNORCA
 { // SNORCA
     std::set<int> used; // SNORCA
     auto add=[&](const ModelConfig& c){for(const auto& k:snorca_filament_keys(c))if(c.opt_int(k)>0)used.insert(c.opt_int(k)-1);}; // SNORCA
     for(const auto* o:wxGetApp().plater()->model().objects){add(o->config);for(const auto& r:o->layer_config_ranges)add(r.second); // SNORCA
         for(const auto* v:o->volumes){add(v->config);for(int e:v->get_extruders())if(e>0)used.insert(e-1);}} // SNORCA
+    // SNORCA (2026-11-14): a used mixed (virtual) filament is not a row; it uses its physical components instead.
+    const auto* bundle=wxGetApp().preset_bundle;const size_t n=bundle->filament_presets.size(); // SNORCA
+    if(bundle->mixed_filaments.enabled_count()>0){std::set<int> rows; // SNORCA
+        for(int u:used){const MixedFilament* mf=size_t(u)<n?nullptr:bundle->mixed_filaments.mixed_filament_from_id(unsigned(u+1),n); // SNORCA
+            if(!mf){rows.insert(u);continue;}for(unsigned id:snorca_mixed_components(*mf,n))if(id>=1&&id<=n)rows.insert(int(id)-1);} // SNORCA
+        used.swap(rows);} // SNORCA
     return nlohmann::json(std::vector<int>(used.begin(),used.end())); // SNORCA
 } // SNORCA
 // SNORCA (2026-11-12): move object/part/layer-range filaments and painted colours from old row i to new row remap[i]
 // (1-based in the model). Returns the restore steps so a failed sync puts the model back exactly; empty = no change. // SNORCA
-static std::vector<std::function<void()>> snorca_remap_model(const std::vector<int>& remap) // SNORCA
+// SNORCA (2026-11-14): vmap (optional) = new 1-based id of each old enabled mixed filament (old id remap.size()+1+k),
+// 0 = that mixed filament was dropped (object setting -> 0 = default, paint -> unpainted). Without vmap: as before. // SNORCA
+static std::vector<std::function<void()>> snorca_remap_model(const std::vector<int>& remap,const std::vector<int>* vmap=nullptr) // SNORCA
 { // SNORCA
     std::vector<std::function<void()>> undo; // SNORCA
-    auto map1=[&](int v){if(v<=0)return v;const size_t i=size_t(v-1);return i<remap.size()&&remap[i]>=0?remap[i]+1:v;}; // SNORCA
+    auto map1=[&](int v){if(v<=0)return v;const size_t i=size_t(v-1); // SNORCA
+        if(i<remap.size())return remap[i]>=0?remap[i]+1:v; // SNORCA
+        if(vmap&&i-remap.size()<vmap->size())return (*vmap)[i-remap.size()]; // SNORCA
+        return v;}; // SNORCA
     auto fix=[&](ModelConfig& c){for(const auto& k:snorca_filament_keys(c)){const int v=c.opt_int(k),n=map1(v);if(n==v)continue; // SNORCA
         c.set_key_value(k,new ConfigOptionInt(n));undo.push_back([&c,k,v](){c.set_key_value(k,new ConfigOptionInt(v));});}}; // SNORCA
     const int first=int(EnforcerBlockerType::Extruder1),last=int(EnforcerBlockerType::ExtruderMax); // SNORCA
     EnforcerBlockerStateMap states;for(int k=0;k<=last;++k)states[k]=EnforcerBlockerType(k);bool paint=false; // SNORCA
     for(size_t i=0;i<remap.size()&&first+int(i)<=last;++i)if(remap[i]>=0&&remap[i]!=int(i)&&first+remap[i]<=last){states[first+i]=EnforcerBlockerType(first+remap[i]);paint=true;} // SNORCA
+    if(vmap)for(size_t k=0;k<vmap->size()&&first+int(remap.size()+k)<=last;++k){const int to=(*vmap)[k],from=int(remap.size()+k)+1; // SNORCA
+        if(to==from)continue;states[first+from-1]=to<=0||first+to-1>last?EnforcerBlockerType::NONE:EnforcerBlockerType(first+to-1);paint=true;} // SNORCA
     for(auto* o:wxGetApp().plater()->model().objects){fix(o->config);for(auto& r:o->layer_config_ranges)fix(r.second); // SNORCA
         for(auto* v:o->volumes){fix(v->config); // SNORCA
             if(!paint||v->mmu_segmentation_facets.empty())continue; // SNORCA
@@ -161,6 +185,75 @@ static std::vector<std::function<void()>> snorca_remap_model(const std::vector<i
             if(!v->mmu_segmentation_facets.set(ts))continue; // SNORCA
             undo.push_back([v,before](){TriangleSelector back(v->mesh());back.deserialize(before,false);v->mmu_segmentation_facets.set(back);});}} // SNORCA
     return undo; // SNORCA
+} // SNORCA
+// SNORCA (2026-11-14): upstream mixed (virtual) filaments under our sync. Mixed filaments are numbered after the
+// physical rows and their definitions name physical rows, so when the sync reorders or removes rows the definitions are
+// rewritten through the same row remap, a mixed filament whose component row is gone is dropped (named in the status),
+// and objects/paint on mixed filaments follow them to their new numbers. Inactive (no change at all) without mixed
+// filaments, so the ordinary sync path is untouched. // SNORCA
+struct SnorcaMixedRemap { // SNORCA
+    bool active{false};size_t old_physical{0};std::vector<MixedFilament> old_mixed; // SNORCA
+    std::string new_definitions,old_print_definitions;bool had_print_definitions{false};std::vector<std::string> dropped; // SNORCA
+}; // SNORCA
+static void snorca_set_mixed_definitions(PresetBundle* bundle,const std::string& defs) // SNORCA: same two places upstream writes
+{ // SNORCA
+    bundle->project_config.set_key_value("mixed_filament_definitions",new ConfigOptionString(defs)); // SNORCA
+    DynamicPrintConfig& print_cfg=bundle->prints.get_edited_preset().config; // SNORCA
+    if(print_cfg.has("mixed_filament_definitions"))print_cfg.set_key_value("mixed_filament_definitions",new ConfigOptionString(defs)); // SNORCA
+} // SNORCA
+static SnorcaMixedRemap snorca_mixed_prepare(const std::vector<int>& remap) // SNORCA
+{ // SNORCA
+    SnorcaMixedRemap m;auto* bundle=wxGetApp().preset_bundle; // SNORCA
+    m.old_physical=bundle->filament_presets.size();m.old_mixed=bundle->mixed_filaments.mixed_filaments(); // SNORCA
+    if(m.old_mixed.empty())return m; // SNORCA
+    m.active=true; // SNORCA
+    const DynamicPrintConfig& print_cfg=bundle->prints.get_edited_preset().config; // SNORCA
+    if(print_cfg.has("mixed_filament_definitions")){m.had_print_definitions=true;m.old_print_definitions=print_cfg.opt_string("mixed_filament_definitions");} // SNORCA
+    std::vector<unsigned> pmap(m.old_physical+1,0); // SNORCA: 1-based old row -> new row, 0 = row gone
+    for(size_t i=0;i<m.old_physical&&i<remap.size();++i)if(remap[i]>=0)pmap[i+1]=unsigned(remap[i]+1); // SNORCA
+    auto mapid=[&](unsigned id){return id>=1&&id<pmap.size()?pmap[id]:0u;}; // SNORCA
+    MixedFilamentManager tmp=bundle->mixed_filaments;std::vector<MixedFilament> kept;size_t vid=m.old_physical; // SNORCA
+    for(MixedFilament mf:tmp.mixed_filaments()){if(mf.enabled)++vid;bool lost=false; // SNORCA
+        const std::string norm=MixedFilamentManager::normalize_manual_pattern(mf.manual_pattern); // SNORCA
+        std::string what="mixed filament "+std::to_string(vid)+" ("; // SNORCA
+        if(!norm.empty()){std::string out; // SNORCA: pattern tokens resolved to rows, written back as literal rows
+            for(const auto& g:MixedFilamentManager::split_pattern_groups(norm)){if(!out.empty())out+=','; // SNORCA
+                for(const auto& t:MixedFilamentManager::split_pattern_group_to_tokens(g,m.old_physical)){ // SNORCA
+                    const unsigned id=mapid(MixedFilamentManager::physical_filament_from_token(t,mf,m.old_physical)); // SNORCA
+                    if(id==0){lost=true;break;}out+=id<10?std::to_string(id):"["+std::to_string(id)+"]";} // SNORCA
+                if(lost)break;} // SNORCA
+            what+="pattern "+norm+")"; // SNORCA
+            if(!lost){mf.manual_pattern=out;mf.component_a=1;mf.component_b=2; // SNORCA: cycle-mode invariant (tokens 1/2 = a/b)
+                std::vector<unsigned> g;for(unsigned id:MixedFilamentManager::decode_gradient_component_ids(mf.gradient_component_ids,0))if(mapid(id))g.push_back(mapid(id)); // SNORCA
+                mf.gradient_component_ids=MixedFilamentManager::encode_gradient_component_ids(g);}} // SNORCA
+        else{std::vector<unsigned> g;for(unsigned id:MixedFilamentManager::decode_gradient_component_ids(mf.gradient_component_ids,0)){if(!mapid(id)){lost=true;break;}g.push_back(mapid(id));} // SNORCA
+            const unsigned a=mapid(mf.component_a),b=mapid(mf.component_b); // SNORCA
+            what+="filaments "+std::to_string(mf.component_a)+" + "+std::to_string(mf.component_b)+")"; // SNORCA
+            if(a==0||b==0||a==b)lost=true; // SNORCA
+            if(!lost){mf.gradient_component_ids=MixedFilamentManager::encode_gradient_component_ids(g);mf.component_a=a;mf.component_b=b;}} // SNORCA
+        if(lost){if(mf.enabled)m.dropped.push_back(what);continue;} // SNORCA
+        kept.push_back(std::move(mf));} // SNORCA
+    tmp.mixed_filaments()=std::move(kept);m.new_definitions=tmp.serialize_custom_entries(); // SNORCA
+    return m; // SNORCA
+} // SNORCA
+// SNORCA: after the rows are in place: regenerate the mixed list from the rewritten definitions and return the virtual map.
+static std::vector<int> snorca_mixed_apply(const SnorcaMixedRemap& m) // SNORCA
+{ // SNORCA
+    auto* bundle=wxGetApp().preset_bundle;snorca_set_mixed_definitions(bundle,m.new_definitions); // SNORCA
+    bundle->update_multi_material_filament_presets(size_t(-1),m.old_physical); // SNORCA
+    (void)bundle->consume_last_filament_id_remap(); // SNORCA: our model remap below replaces upstream's guess
+    const size_t n=bundle->filament_presets.size();std::map<uint64_t,int> now;size_t idx=0; // SNORCA
+    for(const auto& mf:bundle->mixed_filaments.mixed_filaments())if(mf.enabled)now.emplace(mf.stable_id,int(n+1+idx++)); // SNORCA
+    std::vector<int> vmap;for(const auto& mf:m.old_mixed)if(mf.enabled){auto it=now.find(mf.stable_id);vmap.push_back(it==now.end()?0:it->second);} // SNORCA
+    return vmap; // SNORCA
+} // SNORCA
+// SNORCA: after project_config was put back (failed sync, Undo, Edit > Undo/Redo): rebuild the mixed list from it.
+static void snorca_mixed_reload(PresetBundle* bundle,const SnorcaMixedRemap* m=nullptr) // SNORCA
+{ // SNORCA
+    if(m&&m->active&&m->had_print_definitions)bundle->prints.get_edited_preset().config.set_key_value("mixed_filament_definitions",new ConfigOptionString(m->old_print_definitions)); // SNORCA
+    if(bundle->mixed_filaments.mixed_filaments().empty()&&(!bundle->project_config.has("mixed_filament_definitions")||bundle->project_config.opt_string("mixed_filament_definitions").empty()))return; // SNORCA
+    if(!m&&bundle->project_config.has("mixed_filament_definitions"))snorca_set_mixed_definitions(bundle,bundle->project_config.opt_string("mixed_filament_definitions")); // SNORCA
+    bundle->update_multi_material_filament_presets();(void)bundle->consume_last_filament_id_remap(); // SNORCA
 } // SNORCA
 // SNORCA (2026-11-12): one log line per sync result (Auto repeats are logged only when the result changes).
 // No serials, ids or keys: printer preset name, IP address, status text and row labels only. // SNORCA
@@ -293,15 +386,29 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 wxGetApp().plater()->take_snapshot("Sync printer colors");
                 const size_t snapshot_time=wxGetApp().plater()->undo_redo_stack_main().active_snapshot_time(); // SNORCA (2026-11-13)
                 std::vector<std::function<void()>> model_undo; // SNORCA
+                const auto row_remap=planned.at("remap").get<std::vector<int>>(); // SNORCA
+                SnorcaMixedRemap mixed; // SNORCA (2026-11-14)
+                SnorcaQuietGradients quiet_gradients; // SNORCA: no auto-gradient question during the sync
                 try{
-                    model_undo=snorca_remap_model(planned.at("remap").get<std::vector<int>>()); // SNORCA: before the row count changes
+                    mixed=snorca_mixed_prepare(row_remap); // SNORCA
+                    if(!mixed.active)model_undo=snorca_remap_model(row_remap); // SNORCA: before the row count changes (no mixed filaments: as before)
                     const auto& rows=planned.at("rows");bundle->set_num_filaments(unsigned(rows.size()));
                     auto& colors=bundle->project_config.option<ConfigOptionStrings>("filament_colour",true)->values;
                     auto& nozzles=bundle->project_config.option<ConfigOptionInts>("fos_filament_nozzle",true)->values;
                     auto& slots=bundle->project_config.option<ConfigOptionInts>("fos_filament_mms_slot",true)->values;
                     auto& ownership=bundle->project_config.option<ConfigOptionStrings>("fos_filament_sync",true)->values;
                     for(size_t i=0;i<rows.size();++i){const auto& row=rows[i];bundle->filament_presets[i]=row.at("preset").get<std::string>();colors[i]=row.at("color").get<std::string>();nozzles[i]=row.at("nozzle").get<int>();slots[i]=row.at("mms_slot").get<int>();ownership[i]=row.at("ownership").empty()?"":row.at("ownership").dump();if(!row.at("ownership").empty())bundle->ams_multi_color_filment[i].clear();}
-                    bundle->update_multi_material_filament_presets();
+                    { // SNORCA (2026-11-14): upstream's per-row colour lists follow the rows; a printer row is a single colour.
+                        auto& mc=bundle->project_config.option<ConfigOptionStrings>("filament_multi_colors",true)->values; // SNORCA
+                        auto& md=bundle->project_config.option<ConfigOptionInts>("filament_colour_mode",true)->values; // SNORCA
+                        const auto* omc=old_config.option<ConfigOptionStrings>("filament_multi_colors");const auto* omd=old_config.option<ConfigOptionInts>("filament_colour_mode"); // SNORCA
+                        std::vector<int> from(rows.size(),-1);for(size_t i=0;i<row_remap.size();++i)if(row_remap[i]>=0&&size_t(row_remap[i])<rows.size()&&from[row_remap[i]]<0)from[row_remap[i]]=int(i); // SNORCA
+                        mc.resize(rows.size());md.resize(rows.size(),0); // SNORCA
+                        for(size_t j=0;j<rows.size();++j){const bool own=!rows[j].at("ownership").empty(); // SNORCA
+                            if(own||from[j]<0){mc[j]=colors[j];md[j]=0;continue;} // SNORCA
+                            mc[j]=omc&&size_t(from[j])<omc->values.size()?omc->values[from[j]]:colors[j];md[j]=omd&&size_t(from[j])<omd->values.size()?omd->values[from[j]]:0;}} // SNORCA
+                    if(mixed.active){const auto vmap=snorca_mixed_apply(mixed);model_undo=snorca_remap_model(row_remap,&vmap);} // SNORCA: one pass, physical and mixed
+                    else bundle->update_multi_material_filament_presets();
                     wxGetApp().plater()->on_filaments_change(rows.size());
                     for(auto* combo:self->p->combos_filament)combo->update();
                     self->update_nozzle_filament_slots();self->update_dynamic_filament_list();
@@ -322,6 +429,9 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     // SNORCA: short result line; details (what was removed, moved or kept, notes, routes) in the tooltip and the log.
                     std::string summary=result_label.empty()?"Synced "+plural(printer_n,"filament","filaments")+" from "+preset_name:result_label; // SNORCA
                     std::string tip=(result_note.empty()?std::string():result_note+"\n")+"Synced "+plural(printer_n,"filament","filaments")+" from "+address+"."; // SNORCA
+                    if(!mixed.dropped.empty()){summary+="; removed "+plural(mixed.dropped.size(),"mixed filament","mixed filaments"); // SNORCA (2026-11-14)
+                        tip+="\n"+plural(mixed.dropped.size(),"mixed filament was","mixed filaments were")+" removed because a filament "+(mixed.dropped.size()==1?"it":"they")+" mixed is no longer in the list; objects that used "+(mixed.dropped.size()==1?"it":"them")+" now use their default filament:"; // SNORCA
+                        for(const auto& d:mixed.dropped)tip+="\n  "+d;} // SNORCA
                     for(const auto& row:inventory.at("rows")){
                         if(row.value("user_override",false))tip+="\n"+row.at("label").get<std::string>()+": user label, approximate swatch"; // SNORCA
                         else if(row.at("material").get<std::string>().empty()||row.at("color").is_null())tip+="\nUnidentified: "+row.at("label").get<std::string>(); // SNORCA
@@ -336,7 +446,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
                         sp.snorca_sync_move_before_mc=old_multicolor;sp.snorca_sync_move_after_mc=bundle->ams_multi_color_filment;} // SNORCA
                     status(summary,tip+"\n"+inventory_details); // SNORCA
                 }catch(...){for(auto it=model_undo.rbegin();it!=model_undo.rend();++it)(*it)(); // SNORCA: model back as it was
-                    bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;wxGetApp().plater()->on_filaments_change(old_presets.size());wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
+                    bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;snorca_mixed_reload(bundle,&mixed);wxGetApp().plater()->on_filaments_change(old_presets.size());wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
                     wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update();throw;}
             }catch(const std::exception& e){status(std::string("Sync retained palette: ")+e.what());}
         });
@@ -361,6 +471,7 @@ void Sidebar::snorca_sync_follow_undo_redo() // SNORCA
         for(const char* k:{"wipe_tower_x","wipe_tower_y","wipe_tower_rotation_angle"})if(const auto* o=bundle->project_config.option(k))cfg.set_key_value(k,o->clone()); // SNORCA
         bundle->filament_presets=undo?sp.snorca_sync_move_before_presets:sp.snorca_sync_move_after_presets; // SNORCA
         bundle->project_config=cfg;bundle->ams_multi_color_filment=undo?sp.snorca_sync_move_before_mc:sp.snorca_sync_move_after_mc; // SNORCA
+        SnorcaQuietGradients quiet_gradients;snorca_mixed_reload(bundle); // SNORCA (2026-11-14): mixed list from the restored definitions
         wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size());for(auto* combo:p->combos_filament)combo->update(); // SNORCA
         update_nozzle_filament_slots();update_dynamic_filament_list();wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
         wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update(); // SNORCA
@@ -380,6 +491,7 @@ void Sidebar::undo_snorca_filament_sync()
         auto* bundle=wxGetApp().preset_bundle;p->snorca_sync_auto->SetValue(false);wxGetApp().app_config->set("snorca_filament_auto_sync","false");
         bundle->filament_presets=p->snorca_sync_undo_presets;bundle->project_config=*p->snorca_sync_undo_config;bundle->ams_multi_color_filment=p->snorca_sync_undo_multicolor;
         if(p->snorca_sync_undo_printer)wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(*p->snorca_sync_undo_printer);
+        SnorcaQuietGradients quiet_gradients;snorca_mixed_reload(bundle); // SNORCA (2026-11-14)
         wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size());for(auto* combo:p->combos_filament)combo->update();
         update_nozzle_filament_slots();update_dynamic_filament_list();wxGetApp().plater()->on_config_change(bundle->full_config());
                     wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update();

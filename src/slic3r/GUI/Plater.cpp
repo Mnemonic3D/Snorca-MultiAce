@@ -3646,6 +3646,14 @@ Sidebar::~Sidebar()
     p->nozzle_sync_state->alive.store(false, std::memory_order_release); // upstream: drop late nozzle/filament sync callbacks
     p->snorca_sync_alive->store(false);++(*p->snorca_sync_generation);if(p->snorca_sync_timer)p->snorca_sync_timer->Stop();if(p->snorca_sync_thread.joinable())p->snorca_sync_thread.join(); // SNORCA
 }
+// SNORCA (2026-11-14): set while our multiACE sync changes the filament list, so upstream's
+// "create N auto-generated gradients?" question is not shown in the middle of a sync.
+static bool s_snorca_sync_quiet_gradients = false;
+struct SnorcaQuietGradients { // SNORCA
+    bool old;
+    SnorcaQuietGradients() : old(s_snorca_sync_quiet_gradients) { s_snorca_sync_quiet_gradients = true; }
+    ~SnorcaQuietGradients() { s_snorca_sync_quiet_gradients = old; }
+};
 #include "SnorcaFilamentSyncGui.inc"
 
 
@@ -16842,6 +16850,8 @@ void Plater::priv::on_repair_model(wxCommandEvent &event)
 
 bool Plater::priv::confirm_auto_generated_gradients(wxWindow *parent, size_t num_physical)
 {
+    if (s_snorca_sync_quiet_gradients) // SNORCA: no dialog during our multiACE sync; keep the current choice
+        return MixedFilamentManager::auto_generate_enabled();
     auto *app_config = wxGetApp().app_config;
     if (app_config == nullptr)
         return MixedFilamentManager::auto_generate_enabled();
