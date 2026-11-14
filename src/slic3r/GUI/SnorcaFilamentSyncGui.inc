@@ -241,6 +241,16 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 auto planning_before=before;planning_before["untouched_empty_palette"]=snorca_empty_palette_fingerprint(before)==self->p->snorca_sync_empty_baseline;
                 planning_before["verified_empty_repair"]=snorca_verified_empty_repair(before,address,serial);
                 planning_before["used"]=snorca_used_rows(); // SNORCA
+                // SNORCA (2026-11-13): Auto now moves objects off rows the printer does not have. When a filament move (Auto or     SNORCA
+                // button) was undone with Edit > Undo (snorca_sync_follow_undo_redo), Auto leaves the list and the objects alone   SNORCA
+                // for this printer until another printer is selected or the sync button is pressed, so the Undo is not redone.   SNORCA
+                const std::string sel_key=preset_name+"|"+address+"|"+serial+"|"+device.clientId; // SNORCA
+                auto& sp=*self->p; bool auto_undone=false; // SNORCA
+                if(manual)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
+                else{ // SNORCA
+                    if(!sp.snorca_sync_auto_undone_key.empty()&&sp.snorca_sync_auto_undone_key!=sel_key)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
+                    auto_undone=!sp.snorca_sync_auto_undone_key.empty(); // SNORCA
+                    if(auto_undone)planning_before["keep_used_not_on_printer"]=true;} // SNORCA
                 // SNORCA: the pool is exactly this printer's feeds (plan_exact); plan() kept other printers' rows.
                 const auto planned=SnorcaFilamentSync::plan_exact(planning_before,inventory,compatible,manual,MAXIMUM_EXTRUDER_NUMBER); // SNORCA
                 auto* bundle=wxGetApp().preset_bundle;
@@ -263,14 +273,25 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 if(kept_n){if(result_label.empty())result_label=plural(kept_n,"used filament","used filaments")+" not on "+preset_name;else result_label=plural(hand_n+kept_n,"filament","filaments")+" not following "+preset_name; // SNORCA
                     result_note+=std::string(result_note.empty()?"":"\n")+plural(kept_n,"filament is","filaments are")+" used by objects but not loaded on "+preset_name+"; kept at the end of the list. Press the sync button to move those objects to the closest printer filament."; // SNORCA
                     for(const auto& k:planned.at("kept_not_on_printer"))result_note+="\n  "+k.get<std::string>();} // SNORCA
+                // SNORCA (2026-11-13): Auto moved objects off rows the printer does not have; say what moved, in one short line.
+                const size_t moved_n=planned.at("moved").size(); // SNORCA
+                if(!manual&&moved_n){std::string pairs; // SNORCA
+                    for(const auto& m:planned.at("moved"))pairs+=(pairs.empty()?"":", ")+std::to_string(m.at("from").get<int>())+" "+m.value("from_name",std::string())+" → "+std::to_string(m.at("to").get<int>())+" "+m.value("to_name",std::string()); // SNORCA
+                    result_label="Moved "+plural(moved_n,"object filament","object filaments")+" to match "+preset_name+": "+pairs; // SNORCA
+                    result_note=plural(moved_n,"filament","filaments")+" used by objects "+(moved_n==1?"is":"are")+" not loaded on "+preset_name+"; Auto moved those objects to the printer filament of the same material with the closest colour (else the closest colour)."+(result_note.empty()?std::string():"\n"+result_note);} // SNORCA
                 for(const auto& r:planned.at("removed"))inventory_details+="\nRemoved: "+r.get<std::string>(); // SNORCA
                 for(const auto& m:planned.at("moved"))inventory_details+="\nObjects on filament "+std::to_string(m.at("from").get<int>())+" moved to "+std::to_string(m.at("to").get<int>())+(m.at("same_material").get<bool>()?" (same material, closest colour)":" (closest colour, other material)"); // SNORCA
+                if(auto_undone&&planned.at("rows")!=before.at("rows")){ // SNORCA (2026-11-13): an undone move is left as it is
+                    std::string note="The last filament move was undone with Edit > Undo, so Auto leaves the filament list and the objects as they are until another printer is selected or the sync button is pressed."; // SNORCA
+                    for(const auto& k:planned.at("kept_not_on_printer"))note+="\nUsed by objects, not on "+preset_name+": "+k.get<std::string>(); // SNORCA
+                    status("Filament move undone; press sync to match "+preset_name,note);return;} // SNORCA
                 if(planned.at("rows")==before.at("rows")){ // SNORCA
                     if(result_label.empty())result_label="Matches "+preset_name+" ("+plural(printer_n,"filament","filaments")+")"; // SNORCA
                     status(result_label,(result_note.empty()?std::string():result_note+"\n")+inventory_details);return;} // SNORCA
                 const DynamicPrintConfig old_config=bundle->project_config;
                 const auto old_presets=bundle->filament_presets;const auto old_multicolor=bundle->ams_multi_color_filment;
                 wxGetApp().plater()->take_snapshot("Sync printer colors");
+                const size_t snapshot_time=wxGetApp().plater()->undo_redo_stack_main().active_snapshot_time(); // SNORCA (2026-11-13)
                 std::vector<std::function<void()>> model_undo; // SNORCA
                 try{
                     model_undo=snorca_remap_model(planned.at("remap").get<std::vector<int>>()); // SNORCA: before the row count changes
@@ -307,6 +328,12 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     }
                     for(const auto& warning:planned.at("warnings"))tip+="\n"+warning.get<std::string>(); // SNORCA
                     if(!model_undo.empty()){self->p->snorca_sync_undo->Enable(false);tip+="\nObjects now use the new filament numbers (Edit > Undo goes back).";} // SNORCA
+                    if(!model_undo.empty()){ // SNORCA (2026-11-13): objects were renumbered; remembered so Edit > Undo / Redo can put the list back too
+                        sp.snorca_sync_move_time=snapshot_time;sp.snorca_sync_move_sel=sel_key;sp.snorca_sync_auto_undone_key.clear(); // SNORCA
+                        sp.snorca_sync_move_before_rows=before.at("rows").dump();sp.snorca_sync_move_after_rows=snorca_palette_state().at("rows").dump(); // SNORCA
+                        sp.snorca_sync_move_before_presets=old_presets;sp.snorca_sync_move_after_presets=bundle->filament_presets; // SNORCA
+                        sp.snorca_sync_move_before_cfg.reset(new DynamicPrintConfig(old_config));sp.snorca_sync_move_after_cfg.reset(new DynamicPrintConfig(bundle->project_config)); // SNORCA
+                        sp.snorca_sync_move_before_mc=old_multicolor;sp.snorca_sync_move_after_mc=bundle->ams_multi_color_filment;} // SNORCA
                     status(summary,tip+"\n"+inventory_details); // SNORCA
                 }catch(...){for(auto it=model_undo.rbegin();it!=model_undo.rend();++it)(*it)(); // SNORCA: model back as it was
                     bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;wxGetApp().plater()->on_filaments_change(old_presets.size());wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
@@ -315,6 +342,35 @@ void Sidebar::sync_snorca_filaments(bool manual)
         });
     });
 }
+
+// SNORCA (2026-11-13): Edit > Undo / Redo restore the model only (objects, their filament numbers, paint), not the filament
+// list. After a jump in the undo stack, when the list is still the one the last filament move made and the stack is now
+// before that move (Undo), the list from before the move is put back; when the list is the one from before the move and
+// the stack is at or after the move again (Redo), the list after the move is put back. Wipe tower position stays as the
+// undo stack set it. Called by Plater::priv::undo_redo_to with snapshots suppressed.
+void Sidebar::snorca_sync_follow_undo_redo() // SNORCA
+{ // SNORCA
+    auto& sp=*p; if(!sp.snorca_sync_move_before_cfg||!sp.snorca_sync_move_after_cfg)return; // SNORCA
+    try{ // SNORCA
+        const size_t now=wxGetApp().plater()->undo_redo_stack_main().active_snapshot_time(); // SNORCA
+        const std::string rows=snorca_palette_state().at("rows").dump(); // SNORCA
+        const bool undo=now<sp.snorca_sync_move_time&&rows==sp.snorca_sync_move_after_rows,redo=now>=sp.snorca_sync_move_time&&rows==sp.snorca_sync_move_before_rows; // SNORCA
+        if(!undo&&!redo)return; // SNORCA
+        auto* bundle=wxGetApp().preset_bundle; // SNORCA
+        DynamicPrintConfig cfg=*(undo?sp.snorca_sync_move_before_cfg:sp.snorca_sync_move_after_cfg); // SNORCA
+        for(const char* k:{"wipe_tower_x","wipe_tower_y","wipe_tower_rotation_angle"})if(const auto* o=bundle->project_config.option(k))cfg.set_key_value(k,o->clone()); // SNORCA
+        bundle->filament_presets=undo?sp.snorca_sync_move_before_presets:sp.snorca_sync_move_after_presets; // SNORCA
+        bundle->project_config=cfg;bundle->ams_multi_color_filment=undo?sp.snorca_sync_move_before_mc:sp.snorca_sync_move_after_mc; // SNORCA
+        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size());for(auto* combo:p->combos_filament)combo->update(); // SNORCA
+        update_nozzle_filament_slots();update_dynamic_filament_list();wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
+        wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update(); // SNORCA
+        bundle->export_selections(*wxGetApp().app_config); // SNORCA
+        sp.snorca_sync_auto_undone_key=undo?sp.snorca_sync_move_sel:std::string(); // SNORCA
+        const wxString t=wxString::FromUTF8(undo?"Edit > Undo: objects and filament list are back as before the filament move.":"Edit > Redo: the filament move is applied again."); // SNORCA
+        sp.snorca_sync_status->SetLabel(t);sp.snorca_sync_status->SetToolTip(t);Layout(); // SNORCA
+        BOOST_LOG_TRIVIAL(warning)<<"SNORCA filament sync: "<<(undo?"Edit > Undo put the filament list from before the move back":"Edit > Redo put the filament list after the move back"); // SNORCA
+    }catch(const std::exception& e){BOOST_LOG_TRIVIAL(warning)<<"SNORCA filament sync: Undo / Redo of the filament list failed: "<<e.what();} // SNORCA
+} // SNORCA
 
 void Sidebar::undo_snorca_filament_sync()
 {

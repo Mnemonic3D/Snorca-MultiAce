@@ -145,9 +145,9 @@ inline nlohmann::json plan(const nlohmann::json& current, const nlohmann::json& 
 // switching printer A <-> printer B accumulated both printers' feeds (10 rows instead of 7).                                  SNORCA
 // Rows that are not a feed of this printer (another printer's, unowned, or a feed no longer reported):               SNORCA
 //  - not used by any object: removed;                                                                                  SNORCA
-//  - used by an object: the round button (manual) removes them and the objects move to the printer row of the same     SNORCA
-//    material with the closest colour (CIEDE2000), else to the closest colour of any material; Auto keeps them at the  SNORCA
-//    END of the pool (unchanged, so nothing is printed differently behind the user's back) and reports them.          SNORCA
+//  - used by an object: removed, and the objects move to the printer row of the same material with the closest        SNORCA
+//    colour (CIEDE2000), else to the closest colour of any material. Round button and Auto alike (2026-11-13); Auto   SNORCA
+//    keeps them at the END of the pool only when current.keep_used_not_on_printer is set (an Auto move was undone).   SNORCA
 // Hand edits of a printer row (colour, preset, nozzle or slot changed by the user): the round button replaces them    SNORCA
 // with the printer's values; Auto keeps them and reports them as not following the printer.                           SNORCA
 // current: {rows:[{preset,color,nozzle,mms_slot,ownership}], used:[0-based row indices used by objects]}.             SNORCA
@@ -210,8 +210,11 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         const std::string what=std::to_string(i+1)+" "+old[i].value("preset",std::string())+" "+old[i].value("color",std::string()) // SNORCA
             +(own.empty()?std::string(" (not from a printer)"):" (from "+own.value("host",std::string())+")");           // SNORCA
         if(!used.count(int(i))){removed.push_back(what);continue;}                                                      // SNORCA
-        if(!manual){remap[i]=int(rows.size());rows.push_back(old[i]);kept.push_back(what);continue;}                    // SNORCA
-        // Round button, used row not on this printer: same material, closest colour; else closest colour.           SNORCA
+        // SNORCA (user request 2026-11-13, "It didn't automatically refresh like it should"): Auto now moves these objects too,  SNORCA
+        // by the same rule as the round button. Only when the caller asks (keep_used_not_on_printer: an automatic   SNORCA
+        // move was just undone with Edit > Undo) does Auto keep the row at the end as before.                        SNORCA
+        if(!manual&&current.value("keep_used_not_on_printer",false)){remap[i]=int(rows.size());rows.push_back(old[i]);kept.push_back(what);continue;} // SNORCA
+        // Used row not on this printer (round button and Auto): same material, closest colour; else closest colour.  SNORCA
         const std::string m=detail::upper(material_of(old[i].value("preset",std::string())));                           // SNORCA
         int a[3],b[3]; const bool ca=SnorcaColour::parse(old[i].value("color",std::string()),a);                          // SNORCA
         int best=-1; double bd=1e18; bool same_material=false;                                                          // SNORCA
@@ -220,7 +223,12 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
             const double d=ca&&SnorcaColour::parse(rows[k].value("color",std::string()),b)?SnorcaColour::delta_e(a,b):1e9; // SNORCA
             if(d<bd){bd=d;best=int(k);same_material=pass==0;}}                                                          // SNORCA
         remap[i]=best; removed.push_back(what);                                                                         // SNORCA
-        moved.push_back({{"from",i+1},{"to",best+1},{"same_material",same_material},{"what",what}});                    // SNORCA
+        // SNORCA (2026-11-13): plain names for the status line, e.g. "8 Black PLA -> 2 Black PLA".                       SNORCA
+        auto plain=[](const std::string& hex,const std::string& mat){const std::string n=SnorcaColour::name(hex);         // SNORCA
+            return (n.empty()?hex:n)+(mat.empty()?std::string():" "+mat);};                                             // SNORCA
+        moved.push_back({{"from",i+1},{"to",best+1},{"same_material",same_material},{"what",what},                       // SNORCA
+            {"from_name",plain(old[i].value("color",std::string()),m)},                                                 // SNORCA
+            {"to_name",plain(rows[best].value("color",std::string()),rows[best].at("ownership").value("material",std::string()))}}); // SNORCA
     }                                                                                                                   // SNORCA
     if(rows.size()>maximum_rows)throw std::invalid_argument("Printer feeds exceed the filament limit; palette retained."); // SNORCA
     return J{{"rows",rows},{"remap",remap},{"warnings",warnings},{"printer_rows",printer_rows},{"hand_edited",hand},    // SNORCA

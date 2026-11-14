@@ -360,6 +360,128 @@ static std::string snorca_apply_bed_choice(const boost::filesystem::path &path, 
          + (define ? std::string("; outline ") + poly : std::string(has_define && area ? "; the file's own object outlines are used" : "")); // SNORCA
 }                                                                                                             // SNORCA
 
+// SNORCA (2026-11-13, chamber options): writes the chamber choice of the print options window into the exported   SNORCA
+// G-code before upload (same technique as snorca_apply_bed_choice). Only when the window reported a device; on any  SNORCA
+// problem the file is left unchanged. Commands, all read from the stored U1 firmware image:                       SNORCA
+//  Heater (Panda Breath / DragonBreath; both firmwares give M141/M191 macros):                                     SNORCA
+//    start  M141 S<t> (heating starts at once); "print after": M191 S<t> at the wait point (where the U1 start   SNORCA
+//           G-code waits for the chamber, after the bed is hot, before homing Z and the bed mesh);               SNORCA
+//    end    M141 S0. M141/M191 lines the slicer itself wrote (filament chamber settings) are commented out, so   SNORCA
+//           there is one owner of the chamber heater.                                                             SNORCA
+//  Top cover (Klipper purifier.py; inner = circulation fan = the filter fan, exhaust = exhaust fan):              SNORCA
+//    the U1 start G-code's own SET_PURIFIER_MODE block and WAIT_CHAMBER_TEMP are commented out (one owner);      SNORCA
+//    filter  start SET_FAN_SPEED FAN=circulation_fan SPEED=0.6 (routed into the purifier, saves nothing, never   SNORCA
+//            stops a print when the cover is missing); end, after PRINT_END (whose SET_PURIFIER_MODE MODE=0 starts  SNORCA
+//            the printer's stored off-delay): the same line again, then SET_PURIFIER_MODE MODE=0                  SNORCA
+//            INNER_FAN_DELAY_OFF=60 (a one-off delay: _setup_idle_mode reads it as a parameter, not saved);      SNORCA
+//    exhaust start SET_FAN_SPEED FAN=exhaust_fan SPEED=0.6 (idle mode: no automatic pause on chamber alarm);       SNORCA
+//    warm    SET_PURIFIER_MODE MODE=2 (wait) or 3 (no wait) DESIRE_TEMP=<t> FAN_SPEED=0.6 at the start, and for   SNORCA
+//            "print after" WAIT_CHAMBER_TEMP TIMEOUT=180 at the wait point. Those modes set the stored exhaust    SNORCA
+//            off-delay to 0 in the printer's purifier.json (purifier.py); the value the printer reported is      SNORCA
+//            written back at the end (SET_PURIFIER FAN=exhaust DELAY_OFF=<d>) when it was not 0.                  SNORCA
+//  DragonBreath filter (no top cover; also with heat, 2026-11-13): SET_PIN PIN=dragonbreath_filter VALUE=1 at the  SNORCA
+//    start, BEFORE the M141 heat line (filter-on before heating is accepted and stays on through heating; it is   SNORCA
+//    refused once heating); at the end M141 S0, G4 P60000, then VALUE=0 (the print stays "printing" that minute). SNORCA
+//  Panda Breath: no filter command (panda_breath.py has none).                                                   SNORCA
+static std::string snorca_apply_chamber_choice(const boost::filesystem::path &path, const PrintHostUpload &up)   // SNORCA
+{                                                                                                             // SNORCA
+    const std::string heater = snorca_choice(up, "snorca_chamber_heater");                                      // SNORCA
+    const bool cover = snorca_choice(up, "snorca_chamber_cover") == "1";                                        // SNORCA
+    if (heater != "panda_breath" && heater != "dragonbreath" && !cover) return "no chamber device: file unchanged"; // SNORCA
+    const bool dragon = heater == "dragonbreath";                                                             // SNORCA
+    auto on  = [&](const char *k) { return snorca_choice(up, k) == "1"; };                                      // SNORCA
+    auto num = [&](const char *k, int def, int lo, int hi) { int v = def; try { v = std::stoi(snorca_choice(up, k)); } catch (...) {} return std::max(lo, std::min(hi, v)); }; // SNORCA
+    const bool heat      = !heater.empty() && on("snorca_print_chamber_heat");                                // SNORCA
+    const int  heat_t    = num("snorca_print_chamber_heat_temperature", 45, dragon ? 1 : 15, dragon ? 70 : 80); // SNORCA
+    const bool heat_wait = on("snorca_print_chamber_heat_wait");                                              // SNORCA
+    const bool exhaust   = cover && on("snorca_print_chamber_exhaust") && !heat;                              // SNORCA: never with the heater heating
+    const bool warm      = cover && heater.empty() && on("snorca_print_chamber_warm") && !exhaust;            // SNORCA
+    const int  warm_t    = num("snorca_print_chamber_warm_temperature", 42, 1, 45);                           // SNORCA
+    const bool warm_wait = on("snorca_print_chamber_warm_wait");                                              // SNORCA
+    const bool cover_filter  = cover && (on("snorca_print_chamber_filter") || warm);                          // SNORCA
+    const bool dragon_filter = !cover && dragon && on("snorca_print_chamber_filter");                         // SNORCA (2026-11-13): also with heat
+    int delay = -1; try { delay = std::stoi(snorca_choice(up, "snorca_chamber_cover_exhaust_delay")); } catch (...) {} // SNORCA
+    std::vector<std::string> L;                                                                               // SNORCA
+    {                                                                                                         // SNORCA
+        std::ifstream in(path.string(), std::ios::binary); if (!in) return "could not read the file: unchanged"; // SNORCA
+        std::string l; while (std::getline(in, l)) L.push_back(l);                                            // SNORCA
+    }                                                                                                         // SNORCA
+    auto strip = [](std::string t) { const size_t c = t.find(';'); if (c != std::string::npos) t.erase(c);   // SNORCA
+        if (!t.empty() && t.back() == '\r') t.pop_back(); boost::algorithm::trim(t); return t; };              // SNORCA
+    auto word = [](const std::string &code) { std::string w = code.substr(0, code.find_first_of(" \t")); for (auto &c : w) c = char(std::toupper((unsigned char) c)); return w; }; // SNORCA
+    long first_layer = -1, print_start = -1, first_mesh = -1, block_end = -1, last_print_end = -1;           // SNORCA
+    std::vector<long> purifier, waits, slicer_chamber;                                                        // SNORCA
+    for (long i = 0; i < (long) L.size(); ++i) {                                                              // SNORCA
+        const std::string &l = L[i];                                                                          // SNORCA
+        if (!l.empty() && l[0] == ';') {                                                                      // SNORCA
+            if (first_layer < 0 && l.rfind(";LAYER_CHANGE", 0) == 0) first_layer = i;                         // SNORCA
+            if (boost::algorithm::trim_copy(l) == "; EXECUTABLE_BLOCK_END") block_end = i;                    // SNORCA
+            continue;                                                                                         // SNORCA
+        }                                                                                                     // SNORCA
+        const std::string code = strip(l); if (code.empty()) continue;                                        // SNORCA
+        const std::string w = word(code); const bool start = first_layer < 0;                                 // SNORCA
+        if (start && w == "PRINT_START" && print_start < 0) print_start = i;                                  // SNORCA
+        if (start && w == "BED_MESH_CALIBRATE" && first_mesh < 0) first_mesh = i;                             // SNORCA
+        // The U1 start G-code's purifier block, including its stray "DELAY_OFF=0" line.                       SNORCA
+        if (start && cover && (w == "SET_PURIFIER_MODE" || (w.rfind("DELAY_OFF=", 0) == 0 && code.find_first_of(" \t") == std::string::npos))) purifier.push_back(i); // SNORCA
+        if (start && w == "WAIT_CHAMBER_TEMP") waits.push_back(i);                                            // SNORCA
+        if (heat && (w == "M141" || w == "M191")) slicer_chamber.push_back(i);                                // SNORCA
+        if (w == "PRINT_END") last_print_end = i;                                                             // SNORCA
+    }                                                                                                         // SNORCA
+    const long start_at = cover && !purifier.empty() ? purifier.front() : (print_start >= 0 ? print_start + 1 : -1); // SNORCA
+    if (start_at < 0) return "no PRINT_START and no purifier block in the start G-code: file unchanged";      // SNORCA
+    const bool need_wait = (heat && heat_wait) || (warm && warm_wait);                                        // SNORCA
+    const long wait_at = !waits.empty() ? waits.front() : (first_mesh >= 0 ? first_mesh : first_layer);       // SNORCA
+    if (need_wait && (wait_at < 0 || wait_at < start_at)) return "no place to wait for the chamber: file unchanged"; // SNORCA
+    const bool need_end = heat || cover_filter || dragon_filter || (warm && delay > 0);                       // SNORCA
+    const long end_at = block_end >= 0 ? block_end : (last_print_end >= 0 ? last_print_end + 1 : -1);         // SNORCA
+    if (need_end && end_at < 0) return "no end of the print found: file unchanged";                           // SNORCA
+    std::map<long, std::vector<std::string>> before;                                                          // SNORCA
+    std::set<long> comment;                                                                                   // SNORCA
+    if (cover) { comment.insert(purifier.begin(), purifier.end()); comment.insert(waits.begin(), waits.end()); } // SNORCA
+    if (heat) comment.insert(slicer_chamber.begin(), slicer_chamber.end());                                   // SNORCA
+    const std::string T = std::to_string(heat_t), W = std::to_string(warm_t);                                 // SNORCA
+    auto &s = before[start_at];                                                                               // SNORCA
+    s.push_back("; SNORCA print options: chamber at print start");                                              // SNORCA
+    if (dragon_filter) s.push_back("SET_PIN PIN=dragonbreath_filter VALUE=1");                                // SNORCA (2026-11-13): before M141
+    if (heat) s.push_back("M141 S" + T);                                                                      // SNORCA
+    if (warm) s.push_back(std::string("SET_PURIFIER_MODE MODE=") + (warm_wait ? "2" : "3") + " DESIRE_TEMP=" + W + " FAN_SPEED=0.6"); // SNORCA
+    else if (cover_filter) s.push_back("SET_FAN_SPEED FAN=circulation_fan SPEED=0.6");                        // SNORCA
+    if (exhaust) s.push_back("SET_FAN_SPEED FAN=exhaust_fan SPEED=0.6");                                      // SNORCA
+    if (need_wait) {                                                                                          // SNORCA
+        auto &w = before[wait_at];                                                                            // SNORCA
+        w.push_back("; SNORCA print options: wait for the chamber");                                            // SNORCA
+        if (heat && heat_wait) w.push_back("M191 S" + T);                                                     // SNORCA
+        if (warm && warm_wait) w.push_back("WAIT_CHAMBER_TEMP TIMEOUT=180");                                  // SNORCA
+    }                                                                                                         // SNORCA
+    if (need_end) {                                                                                           // SNORCA
+        auto &e = before[end_at];                                                                             // SNORCA
+        e.push_back("; SNORCA print options: chamber at print end");                                            // SNORCA
+        if (heat) e.push_back("M141 S0");                                                                     // SNORCA
+        if (cover_filter) { e.push_back("SET_FAN_SPEED FAN=circulation_fan SPEED=0.6"); e.push_back("SET_PURIFIER_MODE MODE=0 INNER_FAN_DELAY_OFF=60"); } // SNORCA
+        if (warm && delay > 0) e.push_back("SET_PURIFIER FAN=exhaust DELAY_OFF=" + std::to_string(delay));    // SNORCA
+        if (dragon_filter) { e.push_back("G4 P60000"); e.push_back("SET_PIN PIN=dragonbreath_filter VALUE=0"); } // SNORCA
+    }                                                                                                         // SNORCA
+    const boost::filesystem::path tmp = path.string() + ".snorca-chamber";                                      // SNORCA
+    {                                                                                                         // SNORCA
+        std::ofstream out(tmp.string(), std::ios::binary); if (!out) return "could not rewrite the file: unchanged"; // SNORCA
+        for (long i = 0; i < (long) L.size(); ++i) {                                                          // SNORCA
+            const auto it = before.find(i);                                                                   // SNORCA
+            if (it != before.end()) for (const auto &x : it->second) out << x << '\n';                        // SNORCA
+            if (comment.count(i)) out << "; SNORCA print options: replaced: " << strip(L[i]) << '\n';           // SNORCA
+            else out << L[i] << '\n';                                                                         // SNORCA
+        }                                                                                                     // SNORCA
+        if (!out) { out.close(); boost::system::error_code ec2; boost::filesystem::remove(tmp, ec2); return "could not rewrite the file: unchanged"; } // SNORCA
+    }                                                                                                         // SNORCA
+    boost::system::error_code ec; boost::filesystem::rename(tmp, path, ec);                                   // SNORCA
+    if (ec) return "could not replace the file: unchanged";                                                   // SNORCA
+    std::string note = "heater=" + (heater.empty() ? std::string("none") : heater) + " cover=" + (cover ? "yes" : "no") // SNORCA
+        + " heat=" + (heat ? T + (heat_wait ? " wait" : " no-wait") : "off") + " filter=" + (cover_filter ? "cover" : dragon_filter ? "dragonbreath" : "off") // SNORCA
+        + " exhaust=" + (exhaust ? "on" : "off") + " warm=" + (warm ? W + (warm_wait ? " wait" : " no-wait") : "off") // SNORCA
+        + "; lines replaced " + std::to_string(comment.size());                                               // SNORCA
+    return note;                                                                                              // SNORCA
+}                                                                                                             // SNORCA
+
 // 1 = started (printer reports printing), 0 = not started (safe to queue in the inbox), -1 = unknown.       // SNORCA
 int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_fn) const                       // SNORCA
 {                                                                                                             // SNORCA
@@ -484,6 +606,7 @@ bool MultiACE::upload(PrintHostUpload upload_data, ProgressFn progress_fn, Error
     BOOST_LOG_TRIVIAL(warning) << "multiACE: heat before initial load: " << (snorca_heat.empty() ? "pattern not found, file unchanged" : snorca_heat); // SNORCA
     const std::string snorca_bed = snorca_choice(upload_data, "snorca_print_bed_calibration");                    // SNORCA (2026-11-13)
     BOOST_LOG_TRIVIAL(warning) << "multiACE: bed calibration: " << snorca_apply_bed_choice(upload_data.source_path, snorca_bed); // SNORCA
+    BOOST_LOG_TRIVIAL(warning) << "multiACE: chamber: " << snorca_apply_chamber_choice(upload_data.source_path, upload_data); // SNORCA (2026-11-13)
     const int snorca = snorca_auto_start(upload_data, progress_fn);                                               // SNORCA
     BOOST_LOG_TRIVIAL(warning) << "multiACE: automatic start result " << snorca << ": " << m_snorca_outcome.reason; // SNORCA
     if (snorca == 1) { m_snorca_outcome.started = true; return true; }                                            // SNORCA

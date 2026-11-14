@@ -183,6 +183,10 @@
 #include <wx/weakref.h>      // SNORCA
 #include <wx/radiobut.h>     // SNORCA (2026-11-13): print options window
 #include <wx/statline.h>     // SNORCA (2026-11-13)
+#include <wx/valtext.h>      // SNORCA (2026-11-13): chamber temperature boxes (digits only)
+#include <wx/textctrl.h>     // SNORCA (2026-11-13)
+#include <cmath>             // SNORCA (2026-11-13)
+#include <wx/display.h>      // SNORCA (2026-11-13): keep a grown options window on the screen
 #include "Widgets/WebView.hpp" // SNORCA
 #include "../Utils/SnorcaColourName.hpp" // SNORCA: plain colour names in the multiACE windows
 
@@ -480,6 +484,15 @@ struct Sidebar::priv
     std::vector<std::vector<std::string>> snorca_sync_undo_multicolor;
     std::string snorca_sync_undo_after;
     std::string snorca_sync_empty_baseline;
+    // SNORCA (2026-11-13): the last sync that renumbered objects (Auto or button): the filament list before and after it and
+    // the undo-stack time right after its "Sync printer colors" snapshot. Edit > Undo / Redo restore only the model, so
+    // snorca_sync_follow_undo_redo() puts the matching filament list back. snorca_sync_auto_undone_key: the printer whose move
+    // was undone; Auto leaves list and objects alone there until another printer is selected or the button is pressed.
+    size_t snorca_sync_move_time{0};
+    std::string snorca_sync_move_sel, snorca_sync_move_before_rows, snorca_sync_move_after_rows, snorca_sync_auto_undone_key;
+    std::vector<std::string> snorca_sync_move_before_presets, snorca_sync_move_after_presets;
+    std::unique_ptr<DynamicPrintConfig> snorca_sync_move_before_cfg, snorca_sync_move_after_cfg;
+    std::vector<std::vector<std::string>> snorca_sync_move_before_mc, snorca_sync_move_after_mc;
 
     int                         m_menu_filament_id = -1;
     wxPanel* m_panel_filament_content;
@@ -10892,6 +10905,7 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
         if (new_selected_settings_on_sidebar || new_selected_layer_on_sidebar)
             this->sidebar->obj_list()->set_selected_layers_range_idx(layer_range_idx);
 
+        this->sidebar->snorca_sync_follow_undo_redo();   // SNORCA (2026-11-13): the filament list follows an undone / redone filament move
         this->update_after_undo_redo(snapshot_copy, temp_snapshot_was_taken);
         // Enable layer editing after the Undo / Redo jump.
         if (!view3D->is_layers_editing_enabled() && this->layers_height_allowed() && new_variable_layer_editing_active)
@@ -14970,33 +14984,16 @@ void Plater::reslice_SLA_until_step(SLAPrintObjectStep step, const ModelObject &
     // and let the background processing start.
     this->p->restart_background_process(state | priv::UPDATE_BACKGROUND_PROCESS_FORCE_RESTART);
 }
-// SNORCA: true when the plate uses ACE colours the stock Print window cannot carry. That window maps each
-// filament to one of the four heads only, so a filament on a non-zero multiACE slot (or two used
-// filaments on one head) collapses onto whatever that head holds. Values come from the sliced config.
+// SNORCA: true when the plate goes the multiACE way (our "Before this print starts" window, multiACE preflight).
+// User request 2026-11-13 ("Yes, every print"): EVERY job on a printer whose sliced config says multiACE, also a single
+// filament on a directly fed head (multiACE head mode pins it to that head's feeder). Before, only jobs with ACE
+// colours went this way (a filament on a non-zero multiACE slot, or two used filaments on one head).
 static bool snorca_job_needs_multiace(PartPlate *plate)                                                 // SNORCA
 {                                                                                                      // SNORCA
     if (plate == nullptr || plate->fff_print() == nullptr)                                             // SNORCA
         return false;                                                                                  // SNORCA
     const PrintConfig &pc = plate->fff_print()->config();                                             // SNORCA
-    if (pc.mms_system.value != MultiMaterialSupply::mmsMultiACE)                                       // SNORCA
-        return false;                                                                                  // SNORCA
-    std::vector<int> used;                                                                             // SNORCA
-    if (const GCodeProcessorResult *r = plate->get_slice_result())                                     // SNORCA
-        for (const auto &kv : r->print_statistics.total_volumes_per_extruder)                          // SNORCA
-            if (kv.second > 0.)                                                                        // SNORCA
-                used.push_back(int(kv.first));                                                         // SNORCA
-    if (used.empty())                                                                                  // SNORCA
-        for (unsigned int e : plate->fff_print()->extruders())                                        // SNORCA
-            used.push_back(int(e));                                                                    // SNORCA
-    const std::vector<int> &noz = pc.fos_filament_nozzle.values, &slot = pc.fos_filament_mms_slot.values; // SNORCA
-    std::set<int> heads;                                                                               // SNORCA
-    for (int f : used) {                                                                               // SNORCA
-        const int s = size_t(f) < slot.size() ? slot[size_t(f)] : 0;                                  // SNORCA
-        const int n = size_t(f) < noz.size() ? noz[size_t(f)] : f;                                    // SNORCA
-        if (s != 0 || !heads.insert(n).second)                                                         // SNORCA
-            return true;                                                                               // SNORCA
-    }                                                                                                  // SNORCA
-    return false;                                                                                      // SNORCA
+    return pc.mms_system.value == MultiMaterialSupply::mmsMultiACE;                                    // SNORCA (2026-11-13): every print
 }                                                                                                      // SNORCA
 
 void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, bool use_3mf)
@@ -15049,7 +15046,7 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, bool us
     }
 
     if (wxGetApp().app_config->get("use_new_connect") == "true" || is_snapmaker_u1) {
-        if (snorca_job_needs_multiace(get_partplate_list().get_curr_plate())) {   // SNORCA: ACE colours go to multiACE,
+        if (snorca_job_needs_multiace(get_partplate_list().get_curr_plate())) {   // SNORCA: a multiACE printer's jobs go to multiACE,
             fos_send_to_mms(MultiMaterialSupply::mmsMultiACE);                   // SNORCA: automatically, no stock window
             return;                                                              // SNORCA
         }                                                                        // SNORCA
@@ -15211,7 +15208,63 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, bool us
 // style as the "Printing on <printer>" window. Cancel returns false: nothing is exported or sent. The choice is kept in  SNORCA
 // the app config (snorca_print_bed_calibration = area|full|none, snorca_print_flow_calibration = 1|0); first time:  SNORCA
 // print area only, flow calibration ticked.                                                                          SNORCA
-static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, std::string &bed, bool &flow)   // SNORCA
+// SNORCA (2026-11-13, chamber options): which chamber devices the selected printer reports, asked once when Print is  SNORCA
+// pressed on an ACE job (read-only Moonraker object query, same host as multiACE, 2 s connect / 3 s total). Klipper  SNORCA
+// answers {} for an object it does not have. Chamber heater = object panda_breath or dragonbreath; Snapmaker top  SNORCA
+// cover = object purifier with power_detected true AND the two fan objects the slicer switches (fan_generic       SNORCA
+// circulation_fan, fan_generic exhaust_fan, the [purifier] fan names of the U1 printer.cfg). On any failure: no      SNORCA
+// chamber part in the window and the file is not touched (as before).                                                SNORCA
+struct SnorcaChamber                                                                                             // SNORCA
+{                                                                                                              // SNORCA
+    bool        ok = false;            // the printer answered in time with a readable object list             // SNORCA
+    std::string heater;                // "panda_breath" | "dragonbreath" | ""                                  // SNORCA
+    bool        cover = false;         // Snapmaker top cover present and powered                               // SNORCA
+    int         cover_exhaust_delay = -1; // purifier exhaust_fan.delay (the printer's stored seconds), -1 unknown // SNORCA
+    std::string note;                  // one line for the log                                                  // SNORCA
+};                                                                                                             // SNORCA
+static SnorcaChamber snorca_detect_chamber(std::string host)                                                       // SNORCA
+{                                                                                                              // SNORCA
+    SnorcaChamber r;                                                                                             // SNORCA
+    const size_t comma = host.find(','); if (comma != std::string::npos) host.erase(comma);                   // SNORCA: as fetch_topology
+    boost::algorithm::trim(host);                                                                              // SNORCA
+    if (host.empty()) { r.note = "no printer address"; return r; }                                             // SNORCA
+    std::string url = host.rfind("http://", 0) == 0 || host.rfind("https://", 0) == 0 ? host + (host.back() == '/' ? "" : "/") : "http://" + host + "/"; // SNORCA
+    url += "printer/objects/query?panda_breath&dragonbreath&purifier&fan_generic%20circulation_fan&fan_generic%20exhaust_fan"; // SNORCA
+    std::string body; bool done = false;                                                                       // SNORCA
+    {                                                                                                          // SNORCA
+        wxBusyCursor busy;                                                                                     // SNORCA
+        auto http = Http::get(url);                                                                            // SNORCA
+        http.timeout_connect(2).timeout_max(3)                                                                 // SNORCA: never a long wait before the window
+            .on_complete([&](std::string b, unsigned) { body = std::move(b); done = true; })                   // SNORCA
+            .on_error([&](std::string, std::string e, unsigned s) { r.note = "no answer (" + (s ? "HTTP " + std::to_string(s) : e) + ")"; }) // SNORCA
+            .perform_sync();                                                                                   // SNORCA
+    }                                                                                                          // SNORCA
+    if (!done) return r;                                                                                       // SNORCA
+    try {                                                                                                      // SNORCA
+        const auto j = nlohmann::json::parse(body);                                                            // SNORCA
+        const auto &st = j.at("result").at("status");                                                          // SNORCA
+        auto has = [&](const char *k) { return st.contains(k) && st[k].is_object() && !st[k].empty(); };       // SNORCA
+        if (has("dragonbreath")) r.heater = "dragonbreath"; else if (has("panda_breath")) r.heater = "panda_breath"; // SNORCA
+        if (has("purifier") && st["purifier"].value("power_detected", false)) {                                // SNORCA
+            if (has("fan_generic circulation_fan") && has("fan_generic exhaust_fan")) r.cover = true;          // SNORCA
+            const auto &p = st["purifier"];                                                                    // SNORCA
+            if (p.contains("exhaust_fan") && p["exhaust_fan"].is_object() && p["exhaust_fan"].contains("delay") && p["exhaust_fan"]["delay"].is_number()) // SNORCA
+                r.cover_exhaust_delay = int(std::lround(p["exhaust_fan"]["delay"].get<double>()));             // SNORCA
+        }                                                                                                      // SNORCA
+        r.ok = true;                                                                                           // SNORCA
+        r.note = "heater=" + (r.heater.empty() ? std::string("none") : r.heater) + " top_cover=" + (r.cover ? "yes" : "no") // SNORCA
+               + (has("purifier") && !r.cover ? " (purifier object present, not powered or fan objects missing)" : "") // SNORCA
+               + " stored_exhaust_delay=" + std::to_string(r.cover_exhaust_delay);                             // SNORCA
+    } catch (...) { r = SnorcaChamber(); r.note = "unreadable answer"; }                                         // SNORCA
+    return r;                                                                                                  // SNORCA
+}                                                                                                              // SNORCA
+
+// SNORCA (2026-11-13, chamber options): extends the print options window with the chamber part the user approved in three  SNORCA
+// mock-ups (heater / top cover / both). Shown only for what the printer reported. Choices are remembered in the app  SNORCA
+// config (snorca_print_chamber_*), saved on Print only; a box greyed out by the device itself keeps its stored value. SNORCA
+// The chosen values go to `chamber` (upload extended_info); MultiACE.cpp writes the commands into the G-code.        SNORCA
+static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, const SnorcaChamber &ch, std::string &bed, bool &flow, // SNORCA
+                                   std::map<std::string, std::string> &chamber)                               // SNORCA
 {                                                                                                              // SNORCA
     AppConfig *cfg = wxGetApp().app_config;                                                                    // SNORCA
     bed = cfg->get("snorca_print_bed_calibration");                                                            // SNORCA
@@ -15247,6 +15300,122 @@ static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, 
     cb->SetValue(flow);                                                                                        // SNORCA
     top->Add(cb, 0, wxLEFT | wxRIGHT | wxTOP, pad);                                                            // SNORCA
     top->Add(grey(_L("The printer measures each head before printing. Adds a few minutes.")), 0, wxLEFT | wxRIGHT, pad + indent); // SNORCA
+    // ---- SNORCA (2026-11-13): chamber part, only for the devices the printer reported -------------------------- SNORCA
+    const bool heater = ch.ok && !ch.heater.empty(), cover = ch.ok && ch.cover, both = heater && cover;        // SNORCA
+    const bool dragon = ch.heater == "dragonbreath", panda = ch.heater == "panda_breath";                      // SNORCA
+    // Limits the devices accept: Panda Breath heater 15..80 C ([heater_generic panda_breath] min/max_temp, PANDA_BREATH_AUTO  SNORCA
+    // TARGET max 80); DragonBreath 1..70 C (device cap 70, dragonbreath_heater.cfg; 0 would mean off); top cover 1..45 C  SNORCA
+    // (purifier.py sets no limit; 45 is the highest target Snapmaker's own U1 start G-code uses).                 SNORCA
+    const int heat_lo = dragon ? 1 : 15, heat_hi = dragon ? 70 : 80, warm_lo = 1, warm_hi = 45;                // SNORCA
+    auto stored = [&](const char *k, const char *def) { const std::string v = cfg->get(k); return v.empty() ? std::string(def) : v; }; // SNORCA
+    auto clampi = [](wxString s, int def, int lo, int hi) { long v = def; if (!s.Trim().Trim(false).ToLong(&v)) v = def; return int(std::max<long>(lo, std::min<long>(hi, v))); }; // SNORCA
+    bool user_filter = stored("snorca_print_chamber_filter", "1") != "0";                                     // SNORCA
+    wxCheckBox *filter = nullptr, *heat = nullptr, *exhaust = nullptr, *warm = nullptr;                        // SNORCA
+    wxTextCtrl *heat_t = nullptr, *warm_t = nullptr;                                                           // SNORCA
+    wxRadioButton *heat_wait = nullptr, *heat_now = nullptr, *warm_wait = nullptr, *warm_now = nullptr;        // SNORCA
+    wxStaticText *filter_note = nullptr, *exhaust_note = nullptr, *warm_note = nullptr;                        // SNORCA
+    std::vector<wxWindow *> heat_deps, warm_deps;                                                              // SNORCA
+    auto check = [&](const wxString &label, const char *name, bool v) {                                        // SNORCA
+        auto *c = new wxCheckBox(&dlg, wxID_ANY, label, wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, name); // SNORCA
+        c->SetValue(v); top->Add(c, 0, wxLEFT | wxRIGHT | wxTOP, pad); return c; };                            // SNORCA
+    auto help = [&](const wxString &t) { auto *s = grey(t); top->Add(s, 0, wxLEFT | wxRIGHT, pad + indent); return s; }; // SNORCA
+    auto note = [&](const char *name) { auto *s = help(""); s->SetName(name); s->Hide(); return s; };          // SNORCA: one plain line, shown only when a box is greyed
+    auto temp_block = [&](const char *name, int value, int lo, int hi, bool wait, wxTextCtrl *&tc, wxRadioButton *&rw, wxRadioButton *&rn, std::vector<wxWindow *> &deps) { // SNORCA
+        auto *row = new wxBoxSizer(wxHORIZONTAL);                                                              // SNORCA
+        auto *lab = new wxStaticText(&dlg, wxID_ANY, _L("Chamber temperature"));                               // SNORCA
+        tc = new wxTextCtrl(&dlg, wxID_ANY, wxString::Format("%d", std::max(lo, std::min(hi, value))), wxDefaultPosition, wxSize(dlg.FromDIP(64), -1), 0, // SNORCA
+                            wxTextValidator(wxFILTER_DIGITS), std::string(name) + "_temperature");             // SNORCA
+        tc->SetMaxLength(3);                                                                                   // SNORCA
+        auto *unit = new wxStaticText(&dlg, wxID_ANY, wxString::FromUTF8("\xC2\xB0" "C"));                     // SNORCA
+        row->Add(lab, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, dlg.FromDIP(10));                                  // SNORCA
+        row->Add(tc, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, dlg.FromDIP(8));                                    // SNORCA
+        row->Add(unit, 0, wxALIGN_CENTER_VERTICAL);                                                            // SNORCA
+        auto indented = [&](wxSizer *s, int gap) { auto *h = new wxBoxSizer(wxHORIZONTAL); h->AddSpacer(indent); h->Add(s); top->Add(h, 0, wxLEFT | wxRIGHT | wxTOP, gap); }; // SNORCA: indent on the left only
+        indented(row, dlg.FromDIP(10));                                                                        // SNORCA
+        rw = new wxRadioButton(&dlg, wxID_ANY, _L("Print after the chamber reaches the temperature"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP, wxDefaultValidator, std::string(name) + "_wait"); // SNORCA
+        rn = new wxRadioButton(&dlg, wxID_ANY, _L("Print while the chamber is heating"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, std::string(name) + "_nowait"); // SNORCA
+        rw->SetValue(wait); rn->SetValue(!wait);                                                               // SNORCA
+        for (auto *r : {rw, rn}) { auto *s = new wxBoxSizer(wxHORIZONTAL); s->Add(r); indented(s, dlg.FromDIP(12)); } // SNORCA
+        deps = {lab, tc, unit, rw, rn}; };                                                                     // SNORCA
+    auto filter_box = [&](bool no_switch) {                                                                    // SNORCA: no_switch = Panda Breath on original firmware
+        filter = check(_L("Air filter: automatic on and off"), "chamber_filter", user_filter);                 // SNORCA
+        if (no_switch) {                                                                                       // SNORCA
+            help(_L("Only works with DragonBreath firmware."));                                                // SNORCA
+            help(_L("On this Panda Breath the filter runs whenever the heater is on."));                       // SNORCA
+        } else {                                                                                               // SNORCA
+            help(_L("Cleans particles out of the air. It does not heat or cool."));                            // SNORCA
+            help(_L("Turns on when the print starts. Turns off 1 minute after the print finishes."));          // SNORCA
+        }                                                                                                      // SNORCA
+        filter_note = note("chamber_filter_note"); };                                                          // SNORCA
+    if (heater) {                                                                                              // SNORCA
+        top->Add(new wxStaticLine(&dlg), 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad);                         // SNORCA
+        top->Add(bold(dragon ? _L("Chamber heater (DragonBreath)") : _L("Chamber heater (Panda Breath)"), false), 0, wxLEFT | wxRIGHT | wxTOP, pad); // SNORCA: names the device the printer reports
+        if (!cover) filter_box(panda);                                                                              // SNORCA: with the top cover, the cover does the filter
+        heat = check(_L("Heat the chamber for this print"), "chamber_heat", stored("snorca_print_chamber_heat", "1") != "0"); // SNORCA
+        help(_L("The heater is switched off when the print ends."));                                           // SNORCA
+        temp_block("chamber_heat", std::atoi(stored("snorca_print_chamber_heat_temperature", "45").c_str()), heat_lo, heat_hi, // SNORCA
+                   stored("snorca_print_chamber_heat_wait", "1") != "0", heat_t, heat_wait, heat_now, heat_deps); // SNORCA
+    }                                                                                                          // SNORCA
+    if (cover) {                                                                                               // SNORCA
+        top->Add(new wxStaticLine(&dlg), 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad);                         // SNORCA
+        top->Add(bold(_L("Chamber (Snapmaker top cover)"), false), 0, wxLEFT | wxRIGHT | wxTOP, pad);          // SNORCA
+        filter_box(false);                                                                                     // SNORCA
+        exhaust = check(_L("Exhaust fan: blow hot air out of the chamber"), "chamber_exhaust", stored("snorca_print_chamber_exhaust", "0") == "1"); // SNORCA
+        help(_L("A separate fan from the filter. Keeps the chamber from getting too hot."));                   // SNORCA
+        help(both ? _L("Cannot be ticked together with \"Heat the chamber\".") : _L("For PLA and PETG. Off for ABS and ASA.")); // SNORCA
+        exhaust_note = note("chamber_exhaust_note");                                                           // SNORCA
+        if (!heater) {                                                                                         // SNORCA
+            warm = check(_L("Warm the chamber before printing"), "chamber_warm", stored("snorca_print_chamber_warm", "0") == "1"); // SNORCA
+            help(_L("The top cover has no heater. The chamber warms from the bed, cover closed."));            // SNORCA
+            warm_note = note("chamber_warm_note");                                                             // SNORCA
+            temp_block("chamber_warm", std::atoi(stored("snorca_print_chamber_warm_temperature", "42").c_str()), warm_lo, warm_hi, // SNORCA
+                       stored("snorca_print_chamber_warm_wait", "1") != "0", warm_t, warm_wait, warm_now, warm_deps); // SNORCA
+        }                                                                                                      // SNORCA
+        // Stored choices that cannot run together (an earlier version of this window never saves both): heat or   SNORCA
+        // warm wins over the exhaust fan.                                                                     SNORCA
+        if ((heat && heat->GetValue()) || (warm && warm->GetValue())) exhaust->SetValue(false);                // SNORCA
+    }                                                                                                          // SNORCA
+    // Greying and the one-line reasons. Firmware facts behind them (stored U1 image):                         SNORCA
+    //  - DragonBreath: filter ON sent BEFORE M141 is accepted and stays on through heating (test on a real   SNORCA
+    //    printer, 2026-11-13), so its filter box stays the user's choice with heat ticked (user request 2026-11-13);   SNORCA
+    //  - Panda Breath: panda_breath.py has no filter switch at all (only heat target, auto mode, drying);     SNORCA
+    //  - top cover: warming (purifier MODE 2/3) runs the inner (filter) fan and switches the exhaust fan off  SNORCA
+    //    every second (purifier.py _handle_preheat/_hot_chamber_mode); heater + exhaust per the approved mock-up. SNORCA
+    auto set_note = [](wxStaticText *n, const wxString &t) { if (!n) return; n->SetLabel(t); n->Show(!t.empty()); }; // SNORCA
+    auto refresh = [&]() {                                                                                     // SNORCA
+        const bool exh = exhaust && exhaust->GetValue();                                                       // SNORCA
+        if (heat) { heat->Enable(!(both && exh)); }                                                            // SNORCA
+        const bool heat_on = heat && heat->GetValue();                                                         // SNORCA
+        for (auto *w : heat_deps) w->Enable(heat_on);                                                          // SNORCA
+        const bool warm_on = warm && warm->GetValue();                                                         // SNORCA
+        if (warm) { warm->Enable(!exh); set_note(warm_note, exh ? _L("Cannot be used while the exhaust fan is on.") : wxString()); } // SNORCA
+        for (auto *w : warm_deps) w->Enable(warm_on);                                                          // SNORCA
+        if (exhaust) {                                                                                         // SNORCA
+            const bool block = (both && heat_on) || warm_on;                                                   // SNORCA
+            if (block) exhaust->SetValue(false);                                                               // SNORCA
+            exhaust->Enable(!block);                                                                           // SNORCA
+            set_note(exhaust_note, warm_on ? _L("Cannot run while the chamber is being warmed.") : wxString()); // SNORCA
+        }                                                                                                      // SNORCA
+        if (filter) {                                                                                          // SNORCA
+            wxString why; int forced = -1;                                                                     // SNORCA: -1 = user's choice, 0/1 = shown fixed
+            if (cover) { if (warm_on) { forced = 1; why = _L("Warming the chamber runs the filter fan, so the filter is on."); } } // SNORCA
+            else if (panda) { forced = 0; }                                                                    // SNORCA: the reason is the fixed text under the box
+            filter->SetValue(forced < 0 ? user_filter : forced == 1);                                          // SNORCA
+            filter->Enable(forced < 0);                                                                        // SNORCA
+            set_note(filter_note, why);                                                                        // SNORCA
+        }                                                                                                      // SNORCA
+        dlg.Layout(); dlg.Fit();                                                                               // SNORCA
+        if (dlg.IsShown()) {   // a line that appears makes the window taller: keep its bottom (the buttons) on the screen  SNORCA
+            const int di = wxDisplay::GetFromWindow(&dlg);                                                     // SNORCA
+            if (di != wxNOT_FOUND) {                                                                           // SNORCA
+                const wxRect a = wxDisplay(di).GetClientArea(), r = dlg.GetScreenRect();                       // SNORCA
+                if (r.GetBottom() > a.GetBottom()) dlg.Move(r.x, std::max(a.y, a.GetBottom() - r.height));     // SNORCA
+            }                                                                                                  // SNORCA
+        }                                                                                                      // SNORCA
+    };                                                                                                         // SNORCA
+    if (filter) filter->Bind(wxEVT_CHECKBOX, [&](wxCommandEvent &) { user_filter = filter->GetValue(); refresh(); }); // SNORCA
+    for (auto *c : {heat, exhaust, warm}) if (c) c->Bind(wxEVT_CHECKBOX, [&](wxCommandEvent &) { refresh(); }); // SNORCA
+    // ---- end of the chamber part --------------------------------------------------------------------------- SNORCA
     top->Add(grey(_L("The slicer remembers what you picked for next time.")), 0, wxLEFT | wxRIGHT | wxTOP, pad + dlg.FromDIP(8)); // SNORCA
     auto *btns = new wxBoxSizer(wxHORIZONTAL);                                                                 // SNORCA
     auto *cancel = new wxButton(&dlg, wxID_CANCEL, _L("Cancel"));                                              // SNORCA
@@ -15254,6 +15423,7 @@ static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, 
     btns->AddStretchSpacer(); btns->Add(cancel, 0, wxRIGHT, dlg.FromDIP(8)); btns->Add(print);                 // SNORCA
     top->Add(btns, 0, wxEXPAND | wxALL, pad);                                                                  // SNORCA
     dlg.SetSizerAndFit(top);                                                                                   // SNORCA
+    if (heater || cover) refresh();                                                                            // SNORCA (2026-11-13)
     dlg.CenterOnParent();                                                                                      // SNORCA
     print->SetDefault(); print->SetFocus();                                                                    // SNORCA
     if (dlg.ShowModal() != wxID_OK) return false;                                                              // SNORCA
@@ -15261,6 +15431,33 @@ static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, 
     flow = cb->GetValue();                                                                                     // SNORCA
     cfg->set("snorca_print_bed_calibration", bed);                                                             // SNORCA
     cfg->set("snorca_print_flow_calibration", flow ? "1" : "0");                                               // SNORCA
+    if (heater || cover) {                                                                                     // SNORCA (2026-11-13): chamber choice
+        auto b = [](bool v) { return std::string(v ? "1" : "0"); };                                            // SNORCA
+        chamber["snorca_chamber_heater"] = heater ? ch.heater : std::string();                                 // SNORCA
+        chamber["snorca_chamber_cover"]  = b(cover);                                                           // SNORCA
+        if (cover && ch.cover_exhaust_delay >= 0) chamber["snorca_chamber_cover_exhaust_delay"] = std::to_string(ch.cover_exhaust_delay); // SNORCA
+        chamber["snorca_print_chamber_filter"] = b(filter && filter->GetValue());                              // SNORCA: what the window shows (greyed = fixed)
+        if (filter && filter->IsEnabled()) cfg->set("snorca_print_chamber_filter", b(filter->GetValue()));    // SNORCA: a device-greyed box keeps the stored value
+        if (heat) {                                                                                            // SNORCA
+            const int t = clampi(heat_t->GetValue(), 45, heat_lo, heat_hi);                                    // SNORCA
+            chamber["snorca_print_chamber_heat"] = b(heat->GetValue());                                        // SNORCA
+            chamber["snorca_print_chamber_heat_temperature"] = std::to_string(t);                              // SNORCA
+            chamber["snorca_print_chamber_heat_wait"] = b(heat_wait->GetValue());                              // SNORCA
+            cfg->set("snorca_print_chamber_heat", b(heat->GetValue()));                                        // SNORCA
+            cfg->set("snorca_print_chamber_heat_temperature", std::to_string(t));                              // SNORCA
+            cfg->set("snorca_print_chamber_heat_wait", b(heat_wait->GetValue()));                              // SNORCA
+        }                                                                                                      // SNORCA
+        if (exhaust) { chamber["snorca_print_chamber_exhaust"] = b(exhaust->GetValue()); cfg->set("snorca_print_chamber_exhaust", b(exhaust->GetValue())); } // SNORCA
+        if (warm) {                                                                                            // SNORCA
+            const int t = clampi(warm_t->GetValue(), 42, warm_lo, warm_hi);                                    // SNORCA
+            chamber["snorca_print_chamber_warm"] = b(warm->GetValue());                                        // SNORCA
+            chamber["snorca_print_chamber_warm_temperature"] = std::to_string(t);                              // SNORCA
+            chamber["snorca_print_chamber_warm_wait"] = b(warm_wait->GetValue());                              // SNORCA
+            cfg->set("snorca_print_chamber_warm", b(warm->GetValue()));                                        // SNORCA
+            cfg->set("snorca_print_chamber_warm_temperature", std::to_string(t));                              // SNORCA
+            cfg->set("snorca_print_chamber_warm_wait", b(warm_wait->GetValue()));                              // SNORCA
+        }                                                                                                      // SNORCA
+    }                                                                                                          // SNORCA
     cfg->save();                                                                                               // SNORCA: kept even if the slicer is not closed normally
     return true;                                                                                               // SNORCA
 }                                                                                                              // SNORCA
@@ -15383,10 +15580,14 @@ void Plater::fos_send_to_mms(int mms_system)
 
     if (mms_system == MultiMaterialSupply::mmsMultiACE) {                                                      // SNORCA (2026-11-13)
         std::string bed; bool flow = true;                                                                     // SNORCA
-        if (!snorca_ask_print_options(wxGetApp().mainframe, from_u8(wxGetApp().preset_bundle->printers.get_selected_preset_name()), bed, flow)) // SNORCA
+        const SnorcaChamber chamber_devices = snorca_detect_chamber(host);                                         // SNORCA (2026-11-13, chamber options)
+        BOOST_LOG_TRIVIAL(warning) << "multiACE: chamber devices: " << (chamber_devices.ok ? "" : "not known, ") << chamber_devices.note; // SNORCA
+        std::map<std::string, std::string> chamber;                                                            // SNORCA
+        if (!snorca_ask_print_options(wxGetApp().mainframe, from_u8(wxGetApp().preset_bundle->printers.get_selected_preset_name()), chamber_devices, bed, flow, chamber)) // SNORCA
             return;                                                                                            // SNORCA: Cancel = nothing exported, nothing sent
         upload_job.upload_data.extended_info["snorca_print_bed_calibration"]  = bed;                           // SNORCA
         upload_job.upload_data.extended_info["snorca_print_flow_calibration"] = flow ? "1" : "0";              // SNORCA
+        for (const auto &kv : chamber) upload_job.upload_data.extended_info[kv.first] = kv.second;             // SNORCA (2026-11-13)
     }                                                                                                          // SNORCA
 
     p->export_gcode(fs::path(), false, std::move(upload_job));
