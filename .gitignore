@@ -42,6 +42,13 @@ src/Snapmaker_Orca-doc/
 resources/profiles/user/default
 *.code-workspace
 deps_src/build/
+deps_src_github/
+gitlab_deps_src/
+gitlab_deps/
+gitlab_vendor/
+gitlab_build*/
+Orca-deps-wxWidgets/
+sentry-native/
 .claude/
 
 FOrcaSlicer_Windows_Installer_*.exe
@@ -51,3 +58,8 @@ FOrcaSlicer_Windows_Portable_*.zip
 # install_* above. main_build.txt needed its own rule, but the appends that
 # added it were UTF-16LE and never parsed.
 main_build.txt
+
+.hermes/
+CLAUDE.md
+# snapmaker_connection CLI binaries are placed into resources/ locally per platform/architecture and are not tracked
+/resources/snapmaker_connection*

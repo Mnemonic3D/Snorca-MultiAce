@@ -8,6 +8,7 @@
 #include "Thread.hpp"
 #include "format.hpp"
 #include "nlohmann/json.hpp"
+#include "common_func/common_func.hpp"
 
 #include <utility>
 #include <vector>
@@ -40,7 +41,6 @@ namespace Slic3r {
 static const std::string VERSION_CHECK_URL_STABLE = "https://api.github.com/repos/Snapmaker/OrcaSlicer/releases/latest";
 static const std::string VERSION_CHECK_URL = "https://api.github.com/repos/Snapmaker/OrcaSlicer/releases";
 static const std::string PROFILE_UPDATE_URL = "/upgrade/profile/";
-static const std::string FLUTTER_UPDATE_URL = "/upgrade/flutter/";
 static const std::string MODELS_STR = "models";
 
 // FOS: primary update metadata rides on GitHub Pages for both regions. Region here is a
@@ -51,6 +51,13 @@ static const std::string MODELS_STR = "models";
 // FOS: small self-hosted checker, used only when the primary is unreachable. Serves JSON
 // only - never installer bytes. Its file_url points at the CN download-options page.
 #define APP_UPDATE_URL_BASE_FALLBACK "https://fos-release.design4paragon.com"
+
+// snapmaker-config gray release API (POST /config/get). Release builds default to the
+// https prod endpoint; internal testing builds (BBL_INTERNAL_TESTING, flipped together
+// with BBL_RELEASE_TO_PUBLIC in common_func.hpp) default to the http dev gateway, which
+// resolves only inside the office network. Per-machine override: "orca_config_api_url".
+#define CONFIG_API_URL_DEV  "http://gateway.s.com/api/config/get"
+#define CONFIG_API_URL_PROD "https://api.snapmaker.com/api/config/get"
 
 #if defined(_WIN32)
 static const std::string APP_UPDATE_URL = std::string("/upgrade/orca/win/");
@@ -219,6 +226,9 @@ void AppConfig::set_defaults()
     if (get("zoom_to_mouse").empty())
         set_bool("zoom_to_mouse", false);
 
+    if (get("gcode_preview_gpu_accel").empty())
+        set_bool("gcode_preview_gpu_accel", true);
+
 //#ifdef SUPPORT_SHOW_HINTS
     if (get("show_hints").empty())
         set_bool("show_hints", true);
@@ -231,9 +241,6 @@ void AppConfig::set_defaults()
 
     if (get("show_3d_navigator").empty())
         set_bool("show_3d_navigator", true);
-
-    if (get("show_outline").empty())
-        set_bool("show_outline", false);
 
 #ifdef _WIN32
 
@@ -331,6 +338,10 @@ void AppConfig::set_defaults()
 
     if (get("auto_calculate_when_filament_change").empty()){
         set_bool("auto_calculate_when_filament_change", true);
+    }
+
+    if (get("auto_generate_gradients").empty()) {
+        set_bool("auto_generate_gradients", false);
     }
 
     if (get("show_home_page").empty()) {
@@ -705,9 +716,11 @@ std::string AppConfig::load()
             }
         }
 
-        // SM Orca
-        if (j.contains("devices")) {
-            m_device_list = j["devices"].get<std::vector<DeviceInfo>>();
+        // Upstream v2.4.1: device ownership belongs to the connection gateway.
+        // SNORCA: the multiACE connect code still uses the AppConfig device list, so keep loading it.
+        if (j.contains("devices") && j["devices"].is_array()) {
+            try { m_device_list = j["devices"].get<std::vector<DeviceInfo>>(); }
+            catch (const std::exception&) { m_device_list.clear(); } // a bad device entry must not fail the whole config load
         }
     } catch(std::exception err) {
         BOOST_LOG_TRIVIAL(info) << format("parse app config \"%1%\", error: %2%", AppConfig::loading_path(), err.what());
@@ -835,11 +848,6 @@ void AppConfig::save()
             continue;
         }
         for (const auto& kvp : category.second) {
-            // SM Orca
-            if (kvp.first == "use_new_connect") {
-                j[category.first][kvp.first] = false;
-                continue;
-            }
             if (kvp.second == "true") {
                 j[category.first][kvp.first] = true;
                 continue;
@@ -877,15 +885,12 @@ void AppConfig::save()
     }
 
     j["devices"] = json::array();
+    // SNORCA: persist LAN devices for the multiACE connect code (never WAN entries).
     for (size_t i = 0; i < m_device_list.size(); ++i) {
         if (m_device_list[i].link_mode != "wan") {
             j["devices"].push_back(m_device_list[i]);
         }
     }
-
-    // j["devices"] = m_device_list;
-
-
     for (size_t i = 0; i < j["devices"].size(); ++i) {
         j["devices"][i]["connected"] = false;
     }
@@ -1469,25 +1474,6 @@ std::string AppConfig::get_preset_upgrade_url()
     return url;
 }
 
-std::string AppConfig::get_web_resource_upgrade_url()
-{
-    
-    std::string resourceUrl = get("flutter_upgrade_url");
-    
-    if(!resourceUrl.empty())
-        return resourceUrl;
-    
-    std::string localLanguage = get("language");
-    if (localLanguage != "zh_CN")
-        localLanguage = "en";
-    std::string url  = APP_UPDATE_URL_BASE_EN + FLUTTER_UPDATE_URL + localLanguage + std::string("/version.json");
-    auto countryArea = get_country_code();
-    if (countryArea == std::string("CN"))
-        url = APP_UPDATE_URL_BASE_CN + FLUTTER_UPDATE_URL + localLanguage + std::string("/version.json");
-
-    return url;
-}
-
 std::string AppConfig::get_version_upgrade_url(bool stable_only /* = false*/) 
 {
     
@@ -1523,6 +1509,19 @@ std::string AppConfig::get_version_fallback_url()
     return APP_UPDATE_URL_BASE_FALLBACK + APP_UPDATE_URL + localLanguage + std::string("/version.json");
 }
 
+std::string AppConfig::get_config_api_url()
+{
+    std::string overrideUrl = get("orca_config_api_url");
+    if (!overrideUrl.empty())
+        return overrideUrl;
+
+#if BBL_INTERNAL_TESTING
+    return CONFIG_API_URL_DEV;
+#else
+    return CONFIG_API_URL_PROD;
+#endif
+}
+
 std::string AppConfig::version_check_url(bool stable_only/* = false*/) const
 {
     auto from_settings = get("version_check_url");
@@ -1534,6 +1533,7 @@ bool AppConfig::exists()
     return boost::filesystem::exists(config_path());
 }
 
+// SNORCA: device list API kept for the multiACE connect code (removed upstream in v2.4.1).
 void AppConfig::save_device_info(const DeviceInfo& device)
 {
     // 检查是否已存在该设备

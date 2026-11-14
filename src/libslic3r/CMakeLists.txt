@@ -132,6 +132,10 @@ set(lisbslic3r_sources
     Feature/Interlocking/VoxelUtils.cpp
     Feature/Interlocking/VoxelUtils.hpp
     FileParserError.hpp
+    AllowlistManager.cpp
+    AllowlistManager.hpp
+    FilamentColorLibrary.cpp
+    FilamentColorLibrary.hpp
     FilamentHotBedNozzleRules.cpp
     FilamentHotBedNozzleRules.hpp
     Fill/Fill3DHoneycomb.cpp
@@ -246,6 +250,8 @@ set(lisbslic3r_sources
     GCode/WipeTower2.hpp
     GCode/WipeTower.cpp
     GCode/WipeTower.hpp
+    GCode/WipeTowerHelper.cpp
+    GCode/WipeTowerHelper.hpp
     GCodeWriter.cpp
     GCodeWriter.hpp
     Geometry/Bicubic.hpp
@@ -287,6 +293,11 @@ set(lisbslic3r_sources
     MinAreaBoundingBox.hpp
     MinimumSpanningTree.cpp
     MinimumSpanningTree.hpp
+    MixedFilament.cpp
+    MixedFilament.hpp
+    filament_mixer.cpp
+    filament_mixer.h
+    filament_mixer_model.h
     miniz_extension.cpp
     miniz_extension.hpp
     ModelArrange.cpp
@@ -339,6 +350,8 @@ set(lisbslic3r_sources
     PresetBundle.hpp
     Preset.cpp
     Preset.hpp
+    PresetFlowVariant.cpp
+    PresetFlowVariant.hpp
     PrincipalComponents2D.cpp
     PrincipalComponents2D.hpp
     PrintApply.cpp
@@ -351,6 +364,8 @@ set(lisbslic3r_sources
     PrintObject.cpp
     PrintObjectSlice.cpp
     PrintRegion.cpp
+    ProjectSchemaVersion.cpp
+    ProjectSchemaVersion.hpp
     ProjectTask.cpp
     ProjectTask.hpp
     QuadricEdgeCollapse.cpp
@@ -428,6 +443,8 @@ set(lisbslic3r_sources
     Surface.hpp
     SurfaceMesh.hpp
     SVG.cpp
+    SSWCPProtocol.cpp
+    SSWCPProtocol.hpp
     SVG.hpp
     Technologies.hpp
     Tesselate.cpp
@@ -522,6 +539,7 @@ target_include_directories(libslic3r SYSTEM PUBLIC ${EXPAT_INCLUDE_DIRS})
 set(OpenCASCADE_DIR "${CMAKE_PREFIX_PATH}/lib/cmake/occt")
 find_package(OpenCASCADE REQUIRED)
 target_include_directories(libslic3r SYSTEM PUBLIC ${OpenCASCADE_INCLUDE_DIR})
+target_link_libraries(libslic3r PUBLIC nlohmann_json)
 
 find_package(JPEG REQUIRED)
 
@@ -561,6 +579,7 @@ target_link_libraries(libslic3r
         libigl
         libnest2d
         miniz
+        nanosvg
         opencv_world
     PRIVATE
         ${CMAKE_DL_LIBS}
@@ -584,7 +603,9 @@ target_link_libraries(libslic3r
         ZLIB::ZLIB
     )
 
-if(NOT WIN32)
+if (WIN32)
+    target_link_libraries(libslic3r PRIVATE OpenSSL::Crypto crypt32 ws2_32)
+else()
     # Link freetype for OCCT dependency (CAD operations need font rendering)
     target_link_libraries(libslic3r PRIVATE ${FREETYPE_LIBRARIES})
     target_link_libraries(libslic3r PRIVATE OpenSSL::Crypto)
