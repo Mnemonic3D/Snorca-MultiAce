@@ -61,7 +61,9 @@ inline bool refresh_device_flags()
             changed = true;
         }
     }
-    if (changed) wxGetApp().device_card_notify(Json(devices));
+    // Upstream 2.4.1 removed the device-card subscription channel (device cards now come
+    // from the connection gateway), so there is no page to push the list to; callers
+    // refresh the preset lists from the return value.
     return changed;
 }
 
