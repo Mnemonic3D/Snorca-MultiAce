@@ -86,7 +86,7 @@ WebViewPanel::WebViewPanel(wxWindow *parent)
     topsizer->Add(m_info, wxSizerFlags().Expand());
     // Create the webview
     BOOST_LOG_TRIVIAL(warning) << "[FLUTTER_FLOW] [webview] [navigation_requested] view=home url=" << url.ToUTF8().data();
-    m_browser = WebView::CreateWebView(this, url);
+    m_browser = WebView::CreateWebView(this, url, true); // SNORCA: local-only while "Hide online models" is on
 
     wxGetApp().fltviews().add_webview_panel(this, url);
 

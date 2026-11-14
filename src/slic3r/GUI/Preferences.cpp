@@ -15,6 +15,8 @@
 #include "Widgets/ComboBox.hpp"
 #include "Widgets/RadioBox.hpp"
 #include "Widgets/TextInput.hpp"
+#include "Widgets/WebView.hpp"
+#include "HttpServer.hpp"
 #include <wx/listimpl.cpp>
 #include <wx/display.h>
 #include <map>
@@ -770,6 +772,14 @@ wxBoxSizer *PreferencesDialog::create_item_checkbox(wxString title, wxWindow *pa
                 BOOST_LOG_TRIVIAL(warning) <<"send_usage_data changed to: "<<(checkbox->GetValue()?"true" : "false");
                 wxGetApp().user_update_privacy_notify(checkbox->GetValue());
             }
+        // SNORCA: "Hide online models": applied to the open Home/Device pages at once.
+        if (param == "fos_hide_online_models") {
+            const bool hide = checkbox->GetValue();
+            HttpServer::fos_set_hide_online_models(hide);
+            WebView::SetLocalOnly(hide);
+            if (MainFrame *mf = wxGetApp().mainframe)
+                mf->reload_gateway_pages();
+        }
         // if (param == "staff_pick_switch") {
         //     bool pbool = app_config->get("staff_pick_switch") == "true";
         //     wxGetApp().switch_staff_pick(pbool);
@@ -1429,6 +1439,12 @@ wxWindow* PreferencesDialog::create_general_page()
 
     hyperlink->SetFont(Label::Head_13);
     item_priv_policy->Add(hyperlink, 0, wxALIGN_CENTER, 0);
+    // SNORCA: "Hide online models", on by default (app_config fos_hide_online_models).
+    auto item_hide_online_models = create_item_checkbox(_L("Hide online models (Home and Device pages stay offline)"), page,
+        WebView::LocalOnlySupported() ?
+            _L("On by default. The Home and Device pages may then only connect to this computer and the local network: no online model list, pictures or web fonts. Untick to allow them online.") :
+            _L("Not available on this system in this build: the Home page may still load the online model list."),
+        50, "fos_hide_online_models");
 
     auto title_develop_mode = create_item_title(_L("Develop mode"), page, _L("Develop mode"));
     auto item_develop_mode  = create_item_checkbox(_L("Develop mode"), page, _L("Develop mode"), 50, "developer_mode");
@@ -1515,6 +1531,7 @@ wxWindow* PreferencesDialog::create_general_page()
 
     sizer_page->Add(title_user_experience, 0, wxTOP, FromDIP(20));
     sizer_page->Add(item_priv_policy, 0, wxTOP, FromDIP(3));
+    sizer_page->Add(item_hide_online_models, 0, wxTOP, FromDIP(3));
 
     page->SetSizer(sizer_page);
     page->Layout();

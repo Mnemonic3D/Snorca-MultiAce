@@ -30,7 +30,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
 
     // Load the real URL only in load_url(). Creating with Flutter here races the later
     // missing_connection / path=2 LoadURL and cancels the in-flight document (-999).
-    m_browser = WebView::CreateWebView(this, "about:blank");
+    m_browser = WebView::CreateWebView(this, "about:blank", true); // SNORCA: local-only while "Hide online models" is on
     if (m_browser == nullptr) {
         wxLogError("Could not init m_browser");
         return;

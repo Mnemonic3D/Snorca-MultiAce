@@ -21,7 +21,7 @@ WebDeviceDialog::WebDeviceDialog()
     SetBackgroundColour(*wxWHITE);
 
     // Create blank; run() loads the gateway URL once (same pattern as WebPreprintDialog / #679).
-    m_browser = WebView::CreateWebView(this, "about:blank");
+    m_browser = WebView::CreateWebView(this, "about:blank", true); // SNORCA: local-only while "Hide online models" is on
     if (m_browser == nullptr) {
         wxLogError("Could not init m_browser");
         return;

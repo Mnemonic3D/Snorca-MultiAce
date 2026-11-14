@@ -38,7 +38,7 @@ WebPreprintDialog::WebPreprintDialog()
     SetBackgroundColour(*wxWHITE);
 
     // Create the webview with about:blank; the actual page will be loaded by run()
-    m_browser = WebView::CreateWebView(this, "about:blank");
+    m_browser = WebView::CreateWebView(this, "about:blank", true); // SNORCA: local-only while "Hide online models" is on
     if (m_browser == nullptr) {
         wxLogError("Could not init m_browser");
         return;

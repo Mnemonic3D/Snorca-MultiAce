@@ -127,6 +127,7 @@
 #include "BitmapCache.hpp"
 #include "Notebook.hpp"
 #include "Widgets/Label.hpp"
+#include "Widgets/WebView.hpp"
 #include "Widgets/ProgressDialog.hpp"
 #include "Widgets/SideButton.hpp"
 
@@ -2935,6 +2936,11 @@ bool GUI_App::on_init_inner()
 
     // Let the libslic3r know the callback, which will translate messages on demand.
     Slic3r::I18N::set_translate_callback(libslic3r_translate_callback);
+
+    // SNORCA: "Hide online models" (default on): Home/Device pages may only reach this computer and
+    // the local network. The filter must exist before the main window creates those pages.
+    WebView::InitLocalOnlyFilter((boost::filesystem::path(data_dir()) / "cache" / "webkit-local-only").string());
+    WebView::SetLocalOnly(app_config->get_bool("fos_hide_online_models"));
 
     BOOST_LOG_TRIVIAL(info) << "create the main window";
     mainframe = new MainFrame();

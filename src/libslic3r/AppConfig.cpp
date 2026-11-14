@@ -423,6 +423,12 @@ void AppConfig::set_defaults()
         set_bool("send_usage_data", false);
     }
 
+    // SNORCA: "Hide online models" is on unless the user unticks it in Preferences: the Home and
+    // Device pages then make no connection outside this computer and the local network.
+    if (get("fos_hide_online_models").empty()) {
+        set_bool("fos_hide_online_models", true);
+    }
+
     if (get("backup_switch").empty() || get("version") < "01.06.00.00") {
         set_bool("backup_switch", true);
     }

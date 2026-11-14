@@ -47,6 +47,20 @@ webkit_web_view_run_javascript_finish                (WebKitWebView             
 WEBKIT_API void
 webkit_javascript_result_unref              (WebKitJavascriptResult *js_result);
 }
+// SNORCA: WebKitGTK content filter API (WebKitGTK >= 2.24), used by "Hide online models".
+struct WebKitUserContentFilterStore;
+struct WebKitUserContentFilter;
+struct WebKitUserContentManager;
+extern "C" {
+WEBKIT_API WebKitUserContentFilterStore *webkit_user_content_filter_store_new(const gchar *storage_path);
+WEBKIT_API void webkit_user_content_filter_store_save(WebKitUserContentFilterStore *store, const gchar *identifier, GBytes *source,
+                                                      GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
+WEBKIT_API WebKitUserContentFilter *webkit_user_content_filter_store_save_finish(WebKitUserContentFilterStore *store, GAsyncResult *result,
+                                                                                 GError **error);
+WEBKIT_API WebKitUserContentManager *webkit_web_view_get_user_content_manager(WebKitWebView *web_view);
+WEBKIT_API void webkit_user_content_manager_add_filter(WebKitUserContentManager *manager, WebKitUserContentFilter *filter);
+WEBKIT_API void webkit_user_content_manager_remove_filter(WebKitUserContentManager *manager, WebKitUserContentFilter *filter);
+}
 #endif
 
 #ifdef __WIN32__
@@ -353,6 +367,132 @@ wxDEFINE_EVENT(EVT_WEBVIEW_RECREATED, wxCommandEvent);
 static std::vector<wxWebView*> g_webviews;
 static std::vector<wxWebView*> g_delay_webviews;
 
+// SNORCA: "Hide online models" (local-only Home/Device pages).
+static std::vector<wxWebView*> g_local_only_views; // eligible views, filtered while g_local_only_on
+static bool                    g_local_only_on = false;
+#if defined(__linux__)
+static WebKitUserContentFilter *g_local_only_filter      = nullptr;
+static bool                     g_local_only_filter_done = false;
+
+// WebKit content-blocker rules (same JSON format as Safari/WKContentRuleList). The engine has no
+// alternation, so every allowed host form is its own "ignore-previous-rules" entry. Allowed:
+// loopback, RFC1918 and link-local IPv4, ::1 / ULA / link-local IPv6, single-label hosts and
+// *.local (mDNS). Everything else over http(s)/ws(s) is blocked, documents and subresources alike.
+static std::string local_only_rules_json()
+{
+    static const char *const schemes[] = {"https?", "wss?"};
+    static const char *const hosts[]   = {
+        R"(127\\.[0-9]+\\.[0-9]+\\.[0-9]+[:/])",
+        R"(localhost[:/])",
+        R"(\\[::1\\][:/])",
+        R"(10\\.[0-9]+\\.[0-9]+\\.[0-9]+[:/])",
+        R"(192\\.168\\.[0-9]+\\.[0-9]+[:/])",
+        R"(172\\.1[6-9]\\.[0-9]+\\.[0-9]+[:/])",
+        R"(172\\.2[0-9]\\.[0-9]+\\.[0-9]+[:/])",
+        R"(172\\.3[01]\\.[0-9]+\\.[0-9]+[:/])",
+        R"(169\\.254\\.[0-9]+\\.[0-9]+[:/])",
+        R"(\\[f[cd][0-9a-f]*:[^/]*\\][:/])",
+        R"(\\[fe80:[^/]*\\][:/])",
+        R"([^./:@]+[:/])",
+        R"([^/:@]*\\.local[:/])",
+    };
+    std::string json = "[";
+    for (const char *sc : schemes)
+        json += std::string(R"({"trigger":{"url-filter":"^)") + sc + R"(://"},"action":{"type":"block"}},)";
+    for (const char *sc : schemes)
+        for (const char *h : hosts)
+            json += std::string(R"({"trigger":{"url-filter":"^)") + sc + "://" + h + R"("},"action":{"type":"ignore-previous-rules"}},)";
+    json.back() = ']';
+    return json;
+}
+
+static void local_only_apply(wxWebView *view, bool on)
+{
+    if (g_local_only_filter == nullptr || view == nullptr)
+        return;
+    auto *wk = (WebKitWebView *) view->GetNativeBackend();
+    if (wk == nullptr)
+        return;
+    WebKitUserContentManager *ucm = webkit_web_view_get_user_content_manager(wk);
+    if (ucm == nullptr)
+        return;
+    if (on)
+        webkit_user_content_manager_add_filter(ucm, g_local_only_filter);
+    else
+        webkit_user_content_manager_remove_filter(ucm, g_local_only_filter);
+}
+#endif
+
+void WebView::InitLocalOnlyFilter(std::string const &storage_dir)
+{
+#if defined(__linux__)
+    static bool started = false;
+    if (started)
+        return;
+    started = true;
+    WebKitUserContentFilterStore *store = webkit_user_content_filter_store_new(storage_dir.c_str());
+    if (store == nullptr) {
+        g_local_only_filter_done = true;
+        BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: cannot create the WebKit filter store";
+        return;
+    }
+    const std::string json  = local_only_rules_json();
+    GBytes           *bytes = g_bytes_new(json.data(), json.size());
+    webkit_user_content_filter_store_save(
+        store, "snorca-local-only-1", bytes, nullptr,
+        [](GObject *src, GAsyncResult *res, gpointer) {
+            GError *error = nullptr;
+            auto   *store = (WebKitUserContentFilterStore *) src;
+            g_local_only_filter = webkit_user_content_filter_store_save_finish(store, res, &error);
+            if (g_local_only_filter == nullptr) {
+                BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: filter compile failed: " << (error ? error->message : "unknown");
+                if (error)
+                    g_error_free(error);
+            } else {
+                BOOST_LOG_TRIVIAL(info) << "SNORCA local-only: filter ready";
+                for (auto *v : g_local_only_views)
+                    local_only_apply(v, g_local_only_on);
+            }
+            g_local_only_filter_done = true;
+            g_object_unref(store);
+        },
+        nullptr);
+    g_bytes_unref(bytes);
+    // Wait (bounded) so the filter exists before any Home/Device page is created. Called before the
+    // main window exists; WebKit finishes the compile on the default GLib context.
+    const gint64 deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+    while (!g_local_only_filter_done && g_get_monotonic_time() < deadline) {
+        if (!g_main_context_iteration(nullptr, FALSE))
+            g_usleep(2000);
+    }
+    if (!g_local_only_filter_done)
+        BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: filter not ready after 5 s, it is applied when ready";
+#else
+    (void) storage_dir;
+#endif
+}
+
+bool WebView::LocalOnlySupported()
+{
+#if defined(__linux__)
+    return true;
+#else
+    return false;
+#endif
+}
+
+void WebView::SetLocalOnly(bool on)
+{
+    g_local_only_on = on;
+    BOOST_LOG_TRIVIAL(info) << "SNORCA local-only (Hide online models): " << (on ? "on" : "off");
+#if defined(__linux__)
+    if (on && g_local_only_filter == nullptr)
+        BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: requested but no filter is available";
+    for (auto *v : g_local_only_views)
+        local_only_apply(v, on);
+#endif
+}
+
 class WebViewRef : public wxObjectRefData
 {
 public:
@@ -368,11 +508,19 @@ public:
         auto diter = std::find(g_delay_webviews.begin(), g_delay_webviews.end(), m_webView);
         if (diter != g_delay_webviews.end())
             g_delay_webviews.erase(diter);
+        auto liter = std::find(g_local_only_views.begin(), g_local_only_views.end(), m_webView);
+        if (liter != g_local_only_views.end())
+            g_local_only_views.erase(liter);
     }
     wxWebView *m_webView;
 };
 
 wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
+{
+    return CreateWebView(parent, url, false);
+}
+
+wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url, bool local_only_eligible)
 {
 #if wxUSE_WEBVIEW_EDGE
     // Check if a fixed version of edge is present in
@@ -429,6 +577,16 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
         // Keep its initial document blank; the subclass flushes the pending URL after installation.
         webView->Create(parent, wxID_ANY, wxString("about:blank"), wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
         static_cast<WebViewWebKit *>(webView)->AttachNavigationGate();
+#elif defined(__linux__)
+        // SNORCA: an eligible view is created blank, gets the local-only filter, and only then
+        // loads its first URL, so the filter is in place before the page can make any request.
+        webView->Create(parent, wxID_ANY, local_only_eligible ? wxString("about:blank") : url2, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+        if (local_only_eligible) {
+            g_local_only_views.push_back(webView);
+            local_only_apply(webView, g_local_only_on);
+            if (!url2.empty() && url2 != wxString("about:blank"))
+                webView->LoadURL(url2);
+        }
 #else
         webView->Create(parent, wxID_ANY, url2, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
 #endif
