@@ -52,6 +52,18 @@ Every print on a multiACE printer opens the Print window and goes through multiA
 
 A small separate patch for the printer. Experimental. The slicer works without it.
 
+**New: an installer with a window.** No firmware update and no command line. Download the installer for Windows or Linux, start it, type your printer's IP address and follow three steps: find your printer, sign in, install.
+
+<img src="docs/images/snorca-label-installer-step1.png" alt="Installer step 1: Snapmaker U1 found, printer is idle, click Next" width="300"> <img src="docs/images/snorca-label-installer-step3.png" alt="Installer step 3: install the label" width="300">
+
+- It checks that the printer is a U1, is idle and runs the right firmware before it changes anything.
+- If the printer does not keep system changes yet, it tells you, unlocks it for you and waits while the printer reboots.
+- It copies the two label files, checks them and asks before it reboots the printer.
+- "Remove the label" takes it off again.
+- Your printer password is used for the sign-in only. It is not saved and goes nowhere but your printer.
+
+You need SSH switched on in the PAXX extended firmware settings and the printer's root password.
+
 ---
 
 ## What you need
@@ -73,6 +85,7 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 | **Linux** (64-bit) | The `...linux-x86_64.tar.xz` file. Unpack it and run `AppRun`. |
 | **Windows** (64-bit) | The installer `.exe` or the portable `.zip`. New and lightly tested; Windows shows an "unknown publisher" warning. |
 | **Mac** | Not planned for now. |
+| **Touch-screen label installer** (optional) | Windows: the `...ACE-screen-label-installer-EXPERIMENTAL-windows-x64.exe` file. Linux: the `...ACE-screen-label-installer-EXPERIMENTAL-linux-x64` file; make it executable (`chmod +x`) and run it. One file, nothing to install on your PC. Windows shows an "unknown publisher" warning. |
 
 ## Where it stands
 
@@ -80,6 +93,7 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 - **snorca.3** (chamber options, automatic filament move, Print window on every print) was tried by the author on his own printer on Linux. A full print with the DragonBreath filter and heat on together has not been run yet.
 - **Windows** has only been tried in a Windows 11 test machine, not on a real printer. The newest Windows files (snorca.3) have not been run by us.
 - **More than one ACE at once** is written for but only tested with one.
+- **The touch-screen label installer** was run by the author from Linux on one of his own printers, which was already unlocked. The unlock step and the Windows program have only been run against a simulated printer (Windows in a Windows 11 test machine).
 - Some screens in other languages still show the old name.
 
 <details>
@@ -109,6 +123,8 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 <summary><b>For developers: source and building</b></summary>
 
 This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top. The upstream build instructions are in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md). The Windows and Linux builds run on GitHub's machines from `.github/workflows/` and start only when someone presses "Run workflow".
+
+The touch-screen label installer is in [`ace-label-installer/`](ace-label-installer/): Go with an FLTK window, built by the scripts in its `build/` folder.
 
 </details>
 
