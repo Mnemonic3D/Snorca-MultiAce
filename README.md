@@ -26,21 +26,31 @@ No more building the list by hand, and no rows left over from your other printer
 
 Print area only, full bed, or no bed calibration. Flow calibration on or off. It remembers what you picked.
 
-### 3. A clear answer after you press Print.
+### 3. Chamber heater and top cover in the same window.
 
-![After Print: a window showing the printer, each colour, its name and its ACE slot](docs/images/snorca-after-print.png)
+![The Print window on a printer with a DragonBreath: air filter and chamber heat ticked together](docs/images/snorca-chamber-dragonbreath.png)
 
-You see which printer is printing and which ACE slot feeds each colour. If a job cannot start, it says why in plain words.
+If your printer has a chamber heater (Panda Breath or DragonBreath), the window asks whether to heat the chamber, to what temperature, and whether to wait for it before printing. The heater switches off when the print ends.
 
-### 4. Optional: "ACE" on the printer's touch screen.
+![The Print window on a printer with a Panda Breath and the Snapmaker top cover](docs/images/snorca-chamber-panda-top-cover.png)
+
+With the Snapmaker top cover you also get the air filter (on when the print starts, off 1 minute after it finishes) and the exhaust fan. On a DragonBreath the filter and the heat can run together. The slicer only shows what your printer reports, and it remembers what you picked.
+
+### 4. The filament list keeps up by itself.
+
+With Auto sync on, switching printers refreshes the list on its own. If your objects use a filament the new printer does not have, they move to the same material in the closest colour, and one line tells you what moved. Edit > Undo puts the objects and the list back.
+
+### 5. A clear answer after you press Print, on every print.
+
+![After Print: multiACE started the job and shows which spool feeds which filament](docs/images/snorca-single-filament-started.png)
+
+Every print on a multiACE printer opens the Print window and goes through multiACE, also a job with one filament on a normally fed head. Afterwards you see which printer is printing and which spool feeds each colour. If a job cannot start, it says why in plain words.
+
+### 6. Optional: "ACE" on the printer's touch screen.
 
 ![The printer's touch screen showing ACE under the toolhead that has an ACE connected](docs/images/snorca-touch-screen-label.png)
 
 A small separate patch for the printer. Experimental. The slicer works without it.
-
-### Coming next
-
-Chamber options in the Print window: chamber heater (Panda Breath or DragonBreath), air filter, and the Snapmaker top cover fan. Being tested now, not released yet.
 
 ---
 
@@ -67,7 +77,8 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 ## Where it stands
 
 - **Test release.** Tried on two real U1 printers and on a simulated printer. Expect rough edges.
-- **Windows** has only been tried in a Windows 11 test machine, not on a real printer. The newest Windows files (snorca.2) have not been run yet.
+- **snorca.3** (chamber options, automatic filament move, Print window on every print) was tried by the author on his own printer on Linux. A full print with the DragonBreath filter and heat on together has not been run yet.
+- **Windows** has only been tried in a Windows 11 test machine, not on a real printer. The newest Windows files (snorca.3) have not been run by us.
 - **More than one ACE at once** is written for but only tested with one.
 - Some screens in other languages still show the old name.
 
@@ -82,6 +93,9 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 | **Printing ACE colours** | The print window only knows four heads, so two colours can land on the same slot. | Press Print. It spots an ACE job, sends it to multiACE and starts the print. |
 | **Picking spools** | You match them yourself on the printer. | Material must match exactly; colour picks the closest and tells you when it is not exact. |
 | **Bed and flow calibration** | The ACE path had no way to ask. | Pick them when you press Print. *(new in snorca.2)* |
+| **Chamber heater and top cover** | No chamber choices when you press Print. | Pick heat, temperature, wait, air filter and exhaust fan when you press Print. Only what your printer reports is shown. *(new in snorca.3)* |
+| **Auto sync and your objects** | Objects keep filaments the printer does not have. | They move to the same material in the closest colour; Edit > Undo goes back. *(new in snorca.3)* |
+| **Jobs with no ACE colours** | Went to the stock print window. | Every job on a multiACE printer gets the same Print window and goes through multiACE. *(new in snorca.3)* |
 | **After you press Print** | No clear answer. | A window says "Printing on your printer" with each colour, its name and its ACE slot. |
 | **When a job can't start** | An unclear error. | A plain reason, what the job needs next to what is loaded, and a button that opens the multiACE page. |
 | **Saving settings** | Some line-width and speed boxes do not save. | Every one of those boxes saves into your own profile. |
