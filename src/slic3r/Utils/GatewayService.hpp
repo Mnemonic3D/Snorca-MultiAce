@@ -187,6 +187,11 @@ private:
     std::atomic<bool>       stop_requested_{false};
     std::thread             worker_;
 
+    // SNORCA: stop the reconnect loop when the helper cannot be launched (see run()).
+    static constexpr int  k_max_launch_failures{3};
+    ProcessDiscoveryError last_discovery_error_{ProcessDiscoveryError::None};
+    int                   launch_failures_{0};
+
     mutable std::mutex                          callback_mutex_;
     StateCallback                               state_callback_;
     std::map<std::string, NotificationCallback> notification_handlers_;

@@ -9,7 +9,12 @@
 #include <boost/process.hpp>
 #ifdef _WIN32
 #include <boost/process/windows.hpp>
+#else
+#include <boost/process/extend.hpp>
+#include <sys/types.h>
+#include <sys/wait.h>
 #endif
+#include <boost/filesystem/operations.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -168,6 +173,16 @@ ConnectionProcessManager::DiscoveryResult ConnectionProcessManager::discover_por
         result.message = "invalid locale: " + locale;
         return result;
     }
+    // SNORCA: a missing helper is reported without forking (each failed exec used to leave a
+    // zombie copy of the slicer behind). Only checked for the real runner, not an injected one.
+    {
+        boost::system::error_code exists_error;
+        if (!boost::filesystem::is_regular_file(config_.executable, exists_error)) {
+            result.error   = ProcessDiscoveryError::InvalidExecutable;
+            result.message = "connection cli not found: " + config_.executable.filename().string();
+            return result;
+        }
+    }
 
     ProcessRunResult process_result;
     try {
@@ -219,6 +234,9 @@ ConnectionProcessManager::ProcessRunner ConnectionProcessManager::default_runner
         boost::process::async_pipe stdout_pipe(io_context);
         boost::process::child      child;
         std::error_code            launch_error;
+#ifndef _WIN32
+        pid_t                      failed_pid = -1;
+#endif
 
         BOOST_LOG_TRIVIAL(info) << "connection cli launch: executable=" << config.executable
                                 << ", arguments=" << format_arguments(arguments);
@@ -229,16 +247,29 @@ ConnectionProcessManager::ProcessRunner ConnectionProcessManager::default_runner
                                           boost::process::std_err > boost::process::null, boost::process::windows::create_no_window,
                                           launch_error);
 #else
+            // SNORCA: Boost.Process reaps a child whose exec failed only with WNOHANG, which races the
+            // child's _exit and leaves a zombie. Remember the pid so the failure path below reaps it.
             child = boost::process::child(config.executable, boost::process::args = arguments, boost::process::std_out > stdout_pipe,
-                                          boost::process::std_err > boost::process::null, launch_error);
+                                          boost::process::std_err > boost::process::null,
+                                          boost::process::extend::on_error =
+                                              [&failed_pid](auto& exec, const std::error_code&) { failed_pid = exec.pid; },
+                                          launch_error);
 #endif
         } catch (const std::exception& exception) {
             result.launch_failed = true;
             result.error         = exception.what();
+#ifndef _WIN32
+            if (failed_pid > 0)
+                ::waitpid(failed_pid, nullptr, 0);
+#endif
             return result;
         }
 
         if (launch_error) {
+#ifndef _WIN32
+            if (failed_pid > 0)
+                ::waitpid(failed_pid, nullptr, 0); // ECHILD if Boost already reaped it
+#endif
             result.launch_failed = true;
             result.error         = launch_error.message();
             boost::system::error_code pipe_error;

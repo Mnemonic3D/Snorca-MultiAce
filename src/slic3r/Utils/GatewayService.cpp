@@ -666,6 +666,18 @@ void GatewayService::run(const std::string locale)
         if (stop_requested_ || !reconnect_policy_.should_retry())
             break;
 
+        // SNORCA: do not retry for ever when the helper cannot be started at all. A missing helper
+        // stops at once; a helper that exists but fails to launch stops after a few tries. One log
+        // line either way; a restart of the gateway service (or of the app) tries again.
+        if (last_discovery_error_ == ProcessDiscoveryError::InvalidExecutable ||
+            (last_discovery_error_ == ProcessDiscoveryError::LaunchFailed && ++launch_failures_ >= k_max_launch_failures)) {
+            BOOST_LOG_TRIVIAL(warning) << "connection gateway: helper unavailable (" << error.message
+                                       << "); not retrying until the gateway service is restarted";
+            break;
+        }
+        if (last_discovery_error_ != ProcessDiscoveryError::LaunchFailed)
+            launch_failures_ = 0;
+
         // discover_port() detaches the CLI child, so a wedged process from the failed attempt
         // would otherwise linger forever while the next attempt spawns yet another instance.
         // Force-kill the stale process before retrying (TerminateProcess / SIGKILL) so every
@@ -686,6 +698,7 @@ void GatewayService::run(const std::string locale)
 GatewayError GatewayService::connect_once(const std::string& locale)
 {
     const ConnectionProcessManager::DiscoveryResult discovery = dependencies_.process_manager->discover_port(locale);
+    last_discovery_error_                                     = discovery.error; // SNORCA: read by run()
     if (discovery.error != ProcessDiscoveryError::None)
         return {GatewayErrorCode::ReconnectFailed, discovery.message};
 
