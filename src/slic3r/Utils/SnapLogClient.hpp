@@ -503,7 +503,7 @@ public:
         std::deque<RtEvent> rt_queue;
 
         // --- Atomics (lock-free fast paths) ---
-        std::atomic<bool>     consent{true};
+        std::atomic<bool>     consent{false}; // SNORCA: off until init() reads the usage-data switch
         std::atomic<bool>     stop_receiving{true}; // true until init() flips it
         std::atomic<bool>     deps_invalid{false};
         std::atomic<uint64_t> dropped{0};

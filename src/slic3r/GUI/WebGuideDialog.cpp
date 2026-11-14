@@ -640,7 +640,9 @@ int GuideFrame::SaveProfile()
     //     m_MainPtr->app_config->set(std::string(m_SectionName.mb_str()), "privacyuse", "0");
     m_MainPtr->app_config->set("app", PRIVACY_POLICY_FLAGS, PrivacyUse);
     BOOST_LOG_TRIVIAL(warning) << "SaveProfile changed the privacy policy with: " << (PrivacyUse ? "true" : "false");
-    wxGetApp().user_update_privacy_notify(PrivacyUse);
+    // SNORCA: agreeing in the first-run guide does not turn usage data on. Only
+    // Preferences > "Send usage data (telemetry)" (send_usage_data) does.
+    wxGetApp().user_update_privacy_notify(m_MainPtr->app_config->get("app", SEND_USAGE_DATA_KEY) == "true");
     m_MainPtr->app_config->set("region", m_Region);
     m_MainPtr->app_config->set_bool("stealth_mode", StealthMode);
 

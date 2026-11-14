@@ -73,12 +73,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     option(DEP_WX_GTK3 "Build wxWidgets against GTK3" OFF)
 endif()
 
-# Sentry crash reporting - enabled only on Windows by default
-if (WIN32 OR APPLE)
-    set(SLIC3R_SENTRY_DEFAULT ON)
-else()
-    set(SLIC3R_SENTRY_DEFAULT OFF)
-endif()
+# Sentry crash reporting
+# SNORCA: built out on every platform. Sentry starts before settings are read, so it
+# cannot be switched off at run time; turning it on needs -DSLIC3R_SENTRY=ON explicitly.
+set(SLIC3R_SENTRY_DEFAULT OFF)
 option(SLIC3R_SENTRY "Enable Sentry crash reporting SDK" ${SLIC3R_SENTRY_DEFAULT})
 
 set(IS_CROSS_COMPILE FALSE)

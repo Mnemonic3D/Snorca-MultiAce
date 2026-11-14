@@ -1185,13 +1185,10 @@ void GUI_App::post_init()
         CallAfter([this] {
            
             bool cw_showed = this->config_wizard_startup();
-
-            std::string http_url = get_http_url(app_config->get_country_code());
-            std::string language = GUI::into_u8(current_language_code());
-            std::string network_ver = Slic3r::NetworkAgent::get_version();
-            bool        sys_preset  = app_config->get("sync_system_preset") == "true";
-            this->preset_updater->sync(http_url, language, network_ver, sys_preset ? preset_bundle : nullptr);
-            this->request_version_from_config(false, false);
+            (void)cw_showed;
+            // SNORCA: no update checks at startup. Removed: preset_updater->sync() (program
+            // version, profile, network-plugin and printer-config downloads) and
+            // request_version_from_config() (Snapmaker config API, sent the device ID).
 
         });
     }
@@ -1475,6 +1472,11 @@ static std::string decode(std::string const& extra, std::string const& path = {}
 
 int GUI_App::download_plugin(std::string name, std::string package_name, InstallProgressFn pro_fn, WasCancelledFn cancel_fn)
 {
+    // SNORCA: no plugin downloads from the internet (Bambu network plugin included).
+    BOOST_LOG_TRIVIAL(info) << "[download_plugin]: disabled in this build, nothing downloaded";
+    (void)name; (void)package_name; (void)pro_fn; (void)cancel_fn;
+    return -1;
+
     int result = 0;
     json j;
     std::string err_msg;
@@ -3061,6 +3063,29 @@ bool GUI_App::on_init_inner()
                        "configuration file.\nPlease note, application settings will be lost, but printer profiles will not be affected."));
     }
 
+    // SNORCA: SnapLog (Snapmaker log upload) is started only when the user has
+    // turned on Preferences > "Send usage data (telemetry)". Off = never started.
+    if (usage_data_allowed())
+        start_snaplog_client();
+    else
+        BOOST_LOG_TRIVIAL(info) << "SnapLogClient not started: send_usage_data is off";
+
+    profiler.mark("on_init_inner return");
+
+    return true;
+}
+
+bool GUI_App::usage_data_allowed() const
+{
+    return app_config && app_config->get("app", SEND_USAGE_DATA_KEY) == "true";
+}
+
+void GUI_App::start_snaplog_client()
+{
+    if (m_snaplog_started || !usage_data_allowed())
+        return;
+    m_snaplog_started = true;
+
     namespace snap = ::Slic3r::SnapLog::v1;
     snap::SnapLogConfig snap_cfg;
     std::string snap_cc   = app_config ? app_config->get_country_code() : "";
@@ -3077,8 +3102,8 @@ bool GUI_App::on_init_inner()
 
     snap::SnapLogDeps deps;
     deps.do_request            = snap::make_production_do_request(snap_cfg);
-    const bool privacy_consent = app_config && app_config->get("app", PRIVACY_POLICY_FLAGS) == "true";
-    deps.consent_ok            = [privacy_consent]() { return privacy_consent; };
+    // SNORCA: initial consent = the usage-data switch; later changes arrive through set_consent().
+    deps.consent_ok            = [this]() { return usage_data_allowed(); };
     deps.machine_id            = [mid = std::move(machine_id)]() -> std::string { return mid; };
     deps.now_ms                = []() -> int64_t {
         return static_cast<int64_t>(
@@ -3114,10 +3139,11 @@ bool GUI_App::on_init_inner()
 
     snap::SnapLogClient::instance().init(std::move(deps), std::move(snap_cfg));
     BOOST_LOG_TRIVIAL(info) << "SnapLogClient initialized";
-
-    profiler.mark("on_init_inner return");
-
-    return true;
+    // Login identity that arrived before SnapLog was started.
+    if (m_gateway_account.is_login) {
+        snap::SnapLogClient::instance().set_user_token(m_gateway_account.token);
+        snap::SnapLogClient::instance().set_user_id(m_gateway_account.userid);
+    }
 }
 
 void GUI_App::copy_network_if_available()
@@ -3290,6 +3316,8 @@ __retry:
         if (m_agent) {
             m_agent->init_log();
         }
+        // SNORCA: the Bambu network plugin's own event tracking stays off.
+        check_track_enable();
 
         //BBS set cert dir
         if (m_agent)
@@ -4925,11 +4953,13 @@ void maybe_attach_updater_signature(Http& http, const std::string& canonical_que
 
 void GUI_App::check_preset_version()
 {
-    if (preset_updater != nullptr)
-        preset_updater->sync_config_async();
+    // SNORCA: no profile downloads; menu item removed. Kept as a no-op entry point.
 }
 void GUI_App::check_new_version_sf(bool show_tips, bool by_user, int fos_attempt)
 {
+    // SNORCA: update checks removed. Returns at once; no request is made.
+    (void)show_tips; (void)by_user; (void)fos_attempt;
+    return;
     // FOS: attempt 0 hits the primary host; on failure we retry once against the
     // self-hosted fallback. A failed primary fetch is the GFW signal.
     std::string update_url = (fos_attempt == 0) ? app_config->get_version_upgrade_url()
@@ -5103,6 +5133,9 @@ void GUI_App::check_new_version_sf(bool show_tips, bool by_user, int fos_attempt
 
 void GUI_App::request_version_from_config(bool show_tips, bool by_user)
 {
+    // SNORCA: update checks removed. Returns at once; nothing (and no device ID) is sent.
+    (void)show_tips; (void)by_user;
+    return;
     std::string url = app_config->get_config_api_url();
 
     json req;
@@ -7400,10 +7433,11 @@ bool GUI_App::run_wizard(ConfigWizard::RunReason reason, ConfigWizard::StartPage
         sync_gateway_region_after_wizard(locale_before_wizard);
         // BBS: remove SLA related message
     }
-    auto isAgree = wxGetApp().app_config->get("app", PRIVACY_POLICY_FLAGS);
+    // SNORCA: the wizard never turns usage data on; re-announce the switch as it is.
+    auto isAgree = wxGetApp().app_config->get("app", SEND_USAGE_DATA_KEY);
 
     user_update_privacy_notify(isAgree == "true");
-    BOOST_LOG_TRIVIAL(warning) << "run_wizard changed the privacy policy with: " << (isAgree);
+    BOOST_LOG_TRIVIAL(warning) << "run_wizard: send_usage_data is " << (isAgree);
     return res;
 }
 
@@ -7617,6 +7651,9 @@ void GUI_App::notify_foreground_change(const bool active)
 void GUI_App::user_update_privacy_notify(const bool& res)
 {
     set_privacy_policy(res);
+    // SNORCA: SnapLog starts the first time the switch is on (no-op when already started or off).
+    if (res)
+        start_snaplog_client();
     ::Slic3r::SnapLog::v1::SnapLogClient::instance().set_consent(res);
 
     json data;
@@ -7635,9 +7672,9 @@ void GUI_App::user_update_privacy_notify(const bool& res)
 
 bool GUI_App::config_wizard_startup()
 {
-    auto isAgree = wxGetApp().app_config->get("app", PRIVACY_POLICY_FLAGS);
+    auto isAgree = wxGetApp().app_config->get("app", SEND_USAGE_DATA_KEY);
     user_update_privacy_notify(isAgree == "true");
-    BOOST_LOG_TRIVIAL(warning) << "config_wizard_startup changed the privacy policy with: " << (isAgree);
+    BOOST_LOG_TRIVIAL(warning) << "config_wizard_startup: send_usage_data is " << (isAgree);
     // FOS: skip wizard - users add printers after logging in
     return false;
 }

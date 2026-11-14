@@ -576,7 +576,9 @@ void SSWCP_Instance::sw_UploadEvent() {
         std::string tagKey = m_param_data.count("tagKey") ? m_param_data["tagKey"].get<std::string>() : "";
         std::string tagValue = m_param_data.count("tagValue") ? m_param_data["tagValue"].get<std::string>() : "";
 
-        sentryReportLog(SENTRY_LOG_LEVEL(level), content, funcModule, tagKey, tagValue, traceId);
+        // SNORCA: nothing is reported unless usage data is on (Sentry is also built out).
+        if (wxGetApp().usage_data_allowed())
+            sentryReportLog(SENTRY_LOG_LEVEL(level), content, funcModule, tagKey, tagValue, traceId);
 
         send_to_js();
         finish_job();
@@ -617,6 +619,13 @@ void SSWCP_Instance::sw_SnapLog()
         if (!local_log.empty()) {
             BOOST_LOG_TRIVIAL(warning) << "[WCP] [SnapLog] " << local_log;
         }
+    }
+
+    // SNORCA: the Device page's log events go nowhere unless usage data is on.
+    if (!wxGetApp().usage_data_allowed()) {
+        send_to_js();
+        finish_job();
+        return;
     }
 
     using namespace Slic3r::SnapLog::v1;
@@ -4096,7 +4105,9 @@ void SSWCP_UserLogin_Instance::process()
 void SSWCP_UserLogin_Instance::sw_GetUserUpdatePrivacy()
 {
     json data;
-    auto isAgree     = wxGetApp().app_config->get("app", PRIVACY_POLICY_FLAGS);
+    // SNORCA: the Device page asks for its analytics consent here; answer from the
+    // usage-data switch. The JSON field keeps the name the Flutter bundle expects.
+    auto isAgree     = wxGetApp().app_config->get("app", SEND_USAGE_DATA_KEY);
     bool isUserAgree               = false;
 
     if (isAgree == "true")

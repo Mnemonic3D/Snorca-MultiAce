@@ -763,10 +763,11 @@ wxBoxSizer *PreferencesDialog::create_item_checkbox(wxString title, wxWindow *pa
             // dialog has closed, and only if the value actually changed.
             m_gcode_gpu_accel_changed = (checkbox->GetValue() != m_gcode_gpu_accel_initial);
 
-        if (param == PRIVACY_POLICY_FLAGS)
+        // SNORCA: the usage-data (telemetry) switch.
+        if (param == SEND_USAGE_DATA_KEY)
             {
-            app_config->set("app", PRIVACY_POLICY_FLAGS, checkbox->GetValue());
-                BOOST_LOG_TRIVIAL(warning) <<"create_item_checkbox changed the privacy policy with: "<<(checkbox->GetValue()?"true" : "false");
+            app_config->set("app", SEND_USAGE_DATA_KEY, checkbox->GetValue());
+                BOOST_LOG_TRIVIAL(warning) <<"send_usage_data changed to: "<<(checkbox->GetValue()?"true" : "false");
                 wxGetApp().user_update_privacy_notify(checkbox->GetValue());
             }
         // if (param == "staff_pick_switch") {
@@ -1351,7 +1352,7 @@ wxWindow* PreferencesDialog::create_general_page()
     auto title_presets = create_item_title(_L("Presets"), page, _L("Presets"));
     //auto title_network = create_item_title(_L("Network"), page, _L("Network"));
     auto item_user_sync        = create_item_checkbox(_L("Auto sync user presets (Printer/Filament/Process)"), page, _L("User Sync"), 50, "sync_user_preset");
-    auto item_system_sync        = create_item_checkbox(_L("Update built-in Presets automatically."), page, _L("System Sync"), 50, "sync_system_preset");
+    // SNORCA: "Update built-in Presets automatically" removed: no preset downloads in this build.
     auto item_save_presets = create_item_button(_L("Clear my choice on the unsaved presets."), _L("Clear"), page, L"", _L("Clear my choice on the unsaved presets."), []() {
         wxGetApp().app_config->set("save_preset_choise", "");
     });
@@ -1416,7 +1417,10 @@ wxWindow* PreferencesDialog::create_general_page()
     std::string region = app_config->get("language");
 
     auto title_user_experience = create_item_title(_L("User Experience"), page, _L("User Experience"));
-    auto             item_priv_policy      = create_item_checkbox(_L("Join Customer Experience Improvement Program."), page, _L(""), 50,PRIVACY_POLICY_FLAGS);
+    // SNORCA: one switch for usage data, off by default (app_config send_usage_data).
+    auto             item_priv_policy      = create_item_checkbox(_L("Send usage data (telemetry)"), page,
+        _L("Off by default. When on: Snapmaker log upload (slicing and printer-connection events) and the Device page's usage events. Crash reporting and update checks are not in this build."),
+        50, SEND_USAGE_DATA_KEY);
     wxHyperlinkCtrl* hyperlink = nullptr;
     if (region.empty() || region != "zh_CN")
         hyperlink = new wxHyperlinkCtrl(page, wxID_ANY, _L("What data would be collected?"), enUrl);
@@ -1454,7 +1458,6 @@ wxWindow* PreferencesDialog::create_general_page()
     sizer_page->Add(title_presets, 0, wxTOP | wxEXPAND, FromDIP(20));
     sizer_page->Add(item_calc_mode, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_user_sync, 0, wxTOP, FromDIP(3));
-    sizer_page->Add(item_system_sync, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_remember_printer_config, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_save_presets, 0, wxTOP, FromDIP(3));
     //sizer_page->Add(title_network, 0, wxTOP | wxEXPAND, FromDIP(20));

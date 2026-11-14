@@ -2549,22 +2549,7 @@ static wxMenu* generate_help_menu()
     //    [](wxCommandEvent&) {
     //        //TODO
     //    });
-    // Check New Version
-    append_menu_item(
-        helpMenu, wxID_ANY, _L("Check for Update"), _L("Check for Update"),
-        [](wxCommandEvent&) {
-            wxGetApp().request_version_from_config(true, UPDATE_BUSER);
-        }, "", nullptr, []() {
-            return true;
-        });
-
-    append_menu_item(
-        helpMenu, wxID_ANY, _L("Check for Process Preset Updates"), _L("Check for Process Preset Updates"),
-        [](wxCommandEvent&) { 
-            wxGetApp().check_preset_version();
-
-        },
-        "", nullptr, []() { return true; });
+    // SNORCA: "Check for Update" and "Check for Process Preset Updates" removed: no update checks.
 
     append_menu_item(helpMenu, wxID_ANY, _L("Import Profile"), _L("Import Profile"), [](wxCommandEvent&) {
         wxGetApp().import_presets();

@@ -51,6 +51,10 @@
 #endif // _MSW_DARK_MODE
 
 #define PRIVACY_POLICY_FLAGS "privacy_policy_isagree"
+// SNORCA: the one switch for usage data (telemetry): SnapLog, Sentry log events, the
+// Device page's PostHog consent. Default "false". PRIVACY_POLICY_FLAGS stays only as
+// the JSON field name the Flutter Device page expects and for the first-run guide.
+#define SEND_USAGE_DATA_KEY "send_usage_data"
 
 class wxMenuItem;
 class wxMenuBar;
@@ -850,6 +854,12 @@ public:
     // Push foreground/background state change to all subscribed webview instances
     void notify_foreground_change(const bool active);
     void user_update_privacy_notify(const bool& res);
+    // SNORCA: true only when Preferences > "Send usage data (telemetry)" is ticked.
+    bool usage_data_allowed() const;
+    // SNORCA: SnapLog is started only when usage data is allowed (at startup or when
+    // the switch is turned on); it is never started while the switch is off.
+    void start_snaplog_client();
+    bool m_snaplog_started{false};
 
 public:
     bool sm_disconnect_current_machine(bool need_reload_printerview = true);

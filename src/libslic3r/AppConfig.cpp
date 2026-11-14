@@ -38,26 +38,26 @@ using namespace nlohmann;
 
 namespace Slic3r {
 
-static const std::string VERSION_CHECK_URL_STABLE = "https://api.github.com/repos/Snapmaker/OrcaSlicer/releases/latest";
-static const std::string VERSION_CHECK_URL = "https://api.github.com/repos/Snapmaker/OrcaSlicer/releases";
+static const std::string VERSION_CHECK_URL_STABLE = ""; // SNORCA: update checks removed
+static const std::string VERSION_CHECK_URL = "";        // SNORCA: update checks removed
 static const std::string PROFILE_UPDATE_URL = "/upgrade/profile/";
 static const std::string MODELS_STR = "models";
 
 // FOS: primary update metadata rides on GitHub Pages for both regions. Region here is a
 // user-declared setting, not geolocation, so it is not trustworthy for CN routing; the
 // fallback below is selected by REACHABILITY instead, which is the real GFW signal.
-#define APP_UPDATE_URL_BASE_CN "https://jiyang1018.github.io/FOrcaSlicer"
-#define APP_UPDATE_URL_BASE_EN "https://jiyang1018.github.io/FOrcaSlicer"
+#define APP_UPDATE_URL_BASE_CN "" // SNORCA: update checks removed
+#define APP_UPDATE_URL_BASE_EN "" // SNORCA: update checks removed
 // FOS: small self-hosted checker, used only when the primary is unreachable. Serves JSON
 // only - never installer bytes. Its file_url points at the CN download-options page.
-#define APP_UPDATE_URL_BASE_FALLBACK "https://fos-release.design4paragon.com"
+#define APP_UPDATE_URL_BASE_FALLBACK "" // SNORCA: update checks removed
 
 // snapmaker-config gray release API (POST /config/get). Release builds default to the
 // https prod endpoint; internal testing builds (BBL_INTERNAL_TESTING, flipped together
 // with BBL_RELEASE_TO_PUBLIC in common_func.hpp) default to the http dev gateway, which
 // resolves only inside the office network. Per-machine override: "orca_config_api_url".
-#define CONFIG_API_URL_DEV  "http://gateway.s.com/api/config/get"
-#define CONFIG_API_URL_PROD "https://api.snapmaker.com/api/config/get"
+#define CONFIG_API_URL_DEV  "" // SNORCA: update checks removed
+#define CONFIG_API_URL_PROD "" // SNORCA: update checks removed
 
 #if defined(_WIN32)
 static const std::string APP_UPDATE_URL = std::string("/upgrade/orca/win/");
@@ -412,9 +412,15 @@ void AppConfig::set_defaults()
     //     set_bool("staff_pick_switch", false);
     // }
 
-    // FOS: disable auto-sync — Snapmaker server presets are 2.3.14 format, incompatible with FOrcaSlicer 2.3.2
-    if (get("sync_system_preset").empty()) {
-        set_bool("sync_system_preset", false);
+    // SNORCA: no profile/preset downloads from the internet. Forced off every start
+    // (the Preferences item is removed), so an old "true" in the ini cannot revive it.
+    set_bool("sync_system_preset", false);
+
+    // SNORCA: usage data (telemetry) is off unless the user ticks
+    // Preferences > "Send usage data (telemetry)". New key on purpose: an old
+    // privacy_policy_isagree=true from an earlier build does not carry over.
+    if (get("send_usage_data").empty()) {
+        set_bool("send_usage_data", false);
     }
 
     if (get("backup_switch").empty() || get("version") < "01.06.00.00") {
@@ -1458,6 +1464,8 @@ std::string AppConfig::config_path()
 
 std::string AppConfig::get_preset_upgrade_url() 
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     std::string resourceUrl = get("profile_upgrade_url");
     
     if(!resourceUrl.empty())
@@ -1476,6 +1484,8 @@ std::string AppConfig::get_preset_upgrade_url()
 
 std::string AppConfig::get_version_upgrade_url(bool stable_only /* = false*/) 
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     
     std::string resourceUrl = get("orca_upgrade_url");
     
@@ -1498,6 +1508,8 @@ std::string AppConfig::get_version_upgrade_url(bool stable_only /* = false*/)
 // primary is the GFW signal, so this copy advertises CN-reachable download options.
 std::string AppConfig::get_version_fallback_url()
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     std::string resourceUrl = get("orca_upgrade_fallback_url");
     if (!resourceUrl.empty())
         return resourceUrl;
@@ -1511,6 +1523,8 @@ std::string AppConfig::get_version_fallback_url()
 
 std::string AppConfig::get_config_api_url()
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     std::string overrideUrl = get("orca_config_api_url");
     if (!overrideUrl.empty())
         return overrideUrl;
@@ -1524,6 +1538,8 @@ std::string AppConfig::get_config_api_url()
 
 std::string AppConfig::version_check_url(bool stable_only/* = false*/) const
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     auto from_settings = get("version_check_url");
     return from_settings.empty() ? stable_only ? VERSION_CHECK_URL_STABLE : VERSION_CHECK_URL : from_settings;
 }

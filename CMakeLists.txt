@@ -122,12 +122,10 @@ if(DEFINED SLIC3R_ASAN)
     set(ENABLE_ASAN ${SLIC3R_ASAN} CACHE BOOL "Enable AddressSanitizer (ASan)" FORCE)
 endif()
 
-# Sentry crash reporting - enabled only on Windows by default
-if (WIN32 OR APPLE)
-    set(SLIC3R_SENTRY_DEFAULT ON)
-else()
-    set(SLIC3R_SENTRY_DEFAULT OFF)
-endif()
+# Sentry crash reporting
+# SNORCA: built out on every platform. Sentry starts before settings are read, so it
+# cannot be switched off at run time; turning it on needs -DSLIC3R_SENTRY=ON explicitly.
+set(SLIC3R_SENTRY_DEFAULT OFF)
 option(SLIC3R_SENTRY            "Enable Sentry crash reporting SDK" ${SLIC3R_SENTRY_DEFAULT})
 # If SLIC3R_FHS is 1 -> SLIC3R_DESKTOP_INTEGRATION is always 0, othrewise variable.
 CMAKE_DEPENDENT_OPTION(SLIC3R_DESKTOP_INTEGRATION "Allow perfoming desktop integration during runtime" 1 "NOT SLIC3R_FHS" 0)

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import stat
 import sys
@@ -197,6 +198,28 @@ def replace_directory(source: Path, target: Path, resources_dir: Path) -> None:
     shutil.copytree(source, target)
 
 
+# SNORCA: no analytics in the shipped Device page. Snapmaker's bundle loads the PostHog
+# library from index.html; drop the library file(s) and the script tag. The Flutter code
+# checks window.posthog for null before every call, so nothing else needs changing.
+POSTHOG_SCRIPT_TAG = re.compile(r"\s*<script[^>]*\bsrc=[\"'][^\"']*posthog[^\"']*[\"'][^>]*>\s*</script>", re.IGNORECASE)
+
+
+def strip_analytics(web_dir: Path) -> None:
+    for library in sorted(web_dir.rglob("posthog*.js")):
+        library.unlink()
+        print(f"Removed analytics library {library.relative_to(web_dir).as_posix()}")
+    index_path = web_dir / "index.html"
+    if index_path.is_file():
+        text = index_path.read_text(encoding="utf-8")
+        stripped = POSTHOG_SCRIPT_TAG.sub("", text)
+        if stripped != text:
+            with index_path.open("w", encoding="utf-8", newline="") as out:
+                out.write(stripped)
+            print("Removed analytics script tag from index.html")
+        if re.search(r"<script[^>]*posthog", stripped, re.IGNORECASE):
+            raise RuntimeError("index.html still loads an analytics script")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", default=".github/connect-bundle.lock.json", help="connect bundle lock file")
@@ -241,6 +264,7 @@ def main() -> int:
 
         remove_stale_cli_files(resources_dir, asset_keys)
         replace_directory(web_sources[0], resources_dir / "web" / "flutter_web", resources_dir)
+        strip_analytics(resources_dir / "web" / "flutter_web")
 
     print(f"Staged connect CLI and flutter_web into {resources_dir}")
     return 0

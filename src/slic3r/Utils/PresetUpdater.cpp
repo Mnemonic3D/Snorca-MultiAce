@@ -320,6 +320,8 @@ void PresetUpdater::priv::set_download_prefs(AppConfig *app_config)
 // Downloads a file (http get operation). Cancels if the Updater is being destroyed.
 bool PresetUpdater::priv::get_file(const std::string &url, const fs::path &target_path) const
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return false;
     bool res = false;
     fs::path tmp_path = target_path;
     tmp_path += format(".%1%%2%", get_current_pid(), TMP_EXTENSION);
@@ -451,6 +453,8 @@ void PresetUpdater::priv::prune_tmps() const
 // Get Slic3rPE version available online, save in AppConfig.
 void PresetUpdater::priv::sync_version() const
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
 	if (! enabled_version_check) { return; }
 
 #if 0
@@ -551,6 +555,8 @@ void PresetUpdater::priv::parse_version_string(const std::string& body) const
 // Both are saved in cache.
 void PresetUpdater::priv::sync_resources(std::string http_url, std::map<std::string, Resource> &resources, bool check_patch, std::string current_version_str, std::string changelog_file)
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
     std::map<std::string, Resource>    resource_list;
 
     BOOST_LOG_TRIVIAL(info) << boost::format("[Orca Updater]: sync_resources get preferred setting version for app version %1%, url: %2%, current_version_str %3%, check_patch %4%")%SLIC3R_APP_NAME%http_url%current_version_str%check_patch;
@@ -715,6 +721,8 @@ bool PresetUpdater::priv::download_file(const std::string& url,
                                         int   timeout_sec,
                                         bool* cancel_flag )
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return false;
     bool res = false;
 
     fs::path tmp_path = target_path + ".tmp";
@@ -772,6 +780,8 @@ bool PresetUpdater::priv::download_file(const std::string& url,
 
 void PresetUpdater::priv::download_profiles_resource_async(const std::string& url, const std::string& target_path, const std::string& version, bool isAuto_check)
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
     bool res = false;
     fs::path tmp_path = target_path + ".tmp";
 
@@ -864,6 +874,8 @@ void PresetUpdater::priv::download_profiles_resource_async(const std::string& ur
 // Orca: sync config update for currect App version
 void PresetUpdater::priv::sync_config(bool isAuto_check)
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
     auto cache_profile_path        = cache_path;
   
     AppConfig *app_config = GUI::wxGetApp().app_config;
@@ -1009,6 +1021,8 @@ void PresetUpdater::priv::sync_config(bool isAuto_check)
 
 void PresetUpdater::priv::sync_tooltip(std::string http_url, std::string language)
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
     try {
         std::string common_version = "00.00.00.00";
         std::string language_version = "00.00.00.00";
@@ -1090,6 +1104,8 @@ bool PresetUpdater::priv::get_cached_plugins_version(std::string& cached_version
 
 void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_version)
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
     if (plugin_version == "00.00.00.00") {
         BOOST_LOG_TRIVIAL(info) << "non need to sync plugins for there is no plugins currently.";
         return;
@@ -1236,6 +1252,8 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
 
 void PresetUpdater::priv::sync_printer_config(std::string http_url)
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
     std::string curr_version  = SLIC3R_VERSION;
     std::string using_version = curr_version.substr(0, 6) + "00.00";
 
@@ -1693,6 +1711,8 @@ PresetUpdater::~PresetUpdater()
 //BBS: refine the preset updater logic
 void PresetUpdater::sync(std::string http_url, std::string language, std::string plugin_version, PresetBundle *preset_bundle)
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
 
 	if (!p->enabled_version_check && !p->enabled_config_update) { return; }
 
@@ -1851,6 +1871,8 @@ bool PresetUpdater::install_bundles_rsrc(std::vector<std::string> bundles, bool 
 
 void PresetUpdater::sync_config_async()
 {
+    // SNORCA: no downloads from the internet (program, profile, plugin, printer-config or tooltip updates).
+    return;
 	if (p->thread.joinable()) {
 		p->cancel = true;
 		p->thread.join();
