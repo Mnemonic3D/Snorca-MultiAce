@@ -2672,6 +2672,22 @@ Sidebar::Sidebar(Plater *parent)
                                         "2. The order of the Color Mapping list may differ from that of the Color Mixing list."));
     p->m_btn_batch_match->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
         if (!wxGetApp().preset_bundle) return;
+        // SNORCA: Color Mixing Match rewrites the project's filament list (and cannot be undone, see the
+        // NOTE further down). Under multiACE that list was set by our multiACE sync, so ask first;
+        // default No (focus and Escape). Supply not multiACE: unchanged.
+        if (snorca_upstream_sync_blocked()) {
+            MessageDialog ask(this,
+                _L("This replaces the filament list that multiACE sync set. Run multiACE sync again afterwards to restore it. Continue?"),
+                _L("Color Mixing Match"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION);
+            ask.SetButtonLabel(wxID_NO, _L("No"), true);
+            ask.SetEscapeId(wxID_NO);
+            ask.CentreOnScreen();
+            if (ask.ShowModal() != wxID_YES) {
+                BOOST_LOG_TRIVIAL(info) << "SNORCA: Color Mixing Match cancelled at the multiACE question";
+                return;
+            }
+            BOOST_LOG_TRIVIAL(warning) << "SNORCA: Color Mixing Match confirmed under multiACE; the synced filament list may be replaced";
+        }
         // No loaded model → batch match has nothing to map. Surface as a confirmation
         // dialog (not an error — these are "please do X first" hints, not failures)
         // BEFORE opening the dialog, using the same RichMessageDialog style as the
