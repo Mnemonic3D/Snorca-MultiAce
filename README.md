@@ -10,6 +10,8 @@ It makes ACE colour printing on the U1 simple: pick your printer, the slicer rea
 
 **Get the updates as they come:** star and watch this repository, and follow and like [Mnemonic ThreeDs on Facebook](https://www.facebook.com/profile.php?id=61565356706003) and [Mnemonic3D on YouTube](https://youtube.com/@Mnemonic3D).
 
+> **New, 15 November: snorca.1 on Snapmaker Orca 2.4.1 (Linux).** Everything from Snapmaker Orca 2.4.1 (Top Cover, time-lapse browser, spaghetti and foreign object detection settings, mixed filaments, High-Flow, 72 new filament profile files) with all the multiACE features of snorca.3 and the printer-switch fix. Usage data is off by default and there are no update checks. It includes Snapmaker's helper program for the Home and Device pages. Windows and Mac files come later. [What changed and what is not tested yet](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.4.1-snorca.1)
+
 ---
 
 ## What it does
@@ -80,17 +82,18 @@ Those two projects are made by other people; follow their instructions to instal
 
 Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases)**.
 
-**Fix, 15 November (Linux):** if switching printers in the Device tab jumped back to the Prepare printer with Auto sync on, use the `Snorca-MultiAce-2.3.2-snorca.3-switchfix-linux-x86_64.tar.xz` file from the [snorca.3 release](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.3.2-snorca.3). Windows files do not have this fix yet.
+**Newest: [2.4.1-snorca.1](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.4.1-snorca.1)** (Linux, built on Snapmaker Orca 2.4.1, includes the printer-switch fix). Windows users stay on [snorca.3](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.3.2-snorca.3) for now.
 
 | System | What to download |
 |---|---|
-| **Linux** (64-bit) | The `...linux-x86_64.tar.xz` file. Unpack it and run `AppRun`. |
-| **Windows** (64-bit) | The installer `.exe` or the portable `.zip`. New and lightly tested; Windows shows an "unknown publisher" warning. |
+| **Linux** (64-bit) | The `Snorca-MultiAce-2.4.1-snorca.1-linux-x86_64.tar.xz` file from the newest release. Unpack it and run `AppRun`. It uses the same settings folder as snorca.3; back it up first. |
+| **Windows** (64-bit) | The snorca.3 installer `.exe` or portable `.zip` (Snapmaker Orca 2.3.2 base, without the printer-switch fix). A 2.4.1 Windows build is not ready yet. Windows shows an "unknown publisher" warning. |
 | **Mac** | Not planned for now. |
 | **Touch-screen label installer** (optional) | Windows: the `...ACE-screen-label-installer-EXPERIMENTAL-windows-x64.exe` file. Linux: the `...ACE-screen-label-installer-EXPERIMENTAL-linux-x64` file; make it executable (`chmod +x`) and run it. One file, nothing to install on your PC. Windows shows an "unknown publisher" warning. |
 
 ## Where it stands
 
+- **2.4.1-snorca.1** (Snapmaker Orca 2.4.1 base) was tried by the author on Linux. Not tried yet: Windows and Mac, mixed filaments with multiACE sync, Snapmaker sign-in, usage data switched on. Details on the release page.
 - **Test release.** Tried on two real U1 printers and on a simulated printer. Expect rough edges.
 - **snorca.3** (chamber options, automatic filament move, Print window on every print) was tried by the author on his own printer on Linux. A full print with the DragonBreath filter and heat on together has not been run yet.
 - **Windows** has only been tried in a Windows 11 test machine, not on a real printer. The newest Windows files (snorca.3) have not been run by us.
@@ -124,7 +127,7 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 <details>
 <summary><b>For developers: source and building</b></summary>
 
-This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top. The upstream build instructions are in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md). The Windows and Linux builds run on GitHub's machines from `.github/workflows/` and start only when someone presses "Run workflow".
+This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top, merged with [Snapmaker Orca](https://github.com/Snapmaker/OrcaSlicer) v2.4.1 (commit `bac6fd5c1e1c23ddf057cf6471ba4ed7ed621c4c`, full history). The upstream build instructions are in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md). The Windows and Linux builds run on GitHub's machines from `.github/workflows/` and start only when someone presses "Run workflow".
 
 The touch-screen label installer is in [`ace-label-installer/`](ace-label-installer/): Go with an FLTK window, built by the scripts in its `build/` folder.
 
