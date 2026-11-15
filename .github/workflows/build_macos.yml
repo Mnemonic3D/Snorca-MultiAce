@@ -94,7 +94,14 @@ jobs:
       - name: Install pinned CMake ${{ env.CMAKE_PIN }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/cmake.tar.gz" "https://cmake.org/files/v3.31/cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          # Kitware's GitHub release (cmake.org's certificate failed to verify on the runner),
+          # checked against Kitware's published SHA-256 list.
+          base="https://github.com/Kitware/CMake/releases/download/v${CMAKE_PIN}"
+          f="cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$f" "$base/$f"
+          curl -fsSL -o "$RUNNER_TEMP/cmake-SHA-256.txt" "$base/cmake-${CMAKE_PIN}-SHA-256.txt"
+          (cd "$RUNNER_TEMP" && grep " $f\$" cmake-SHA-256.txt | shasum -a 256 -c -)
+          mv "$RUNNER_TEMP/$f" "$RUNNER_TEMP/cmake.tar.gz"
           tar -xzf "$RUNNER_TEMP/cmake.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/cmake-${CMAKE_PIN}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
 
@@ -160,7 +167,14 @@ jobs:
 
       - name: Install pinned CMake ${{ env.CMAKE_PIN }}
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/cmake.tar.gz" "https://cmake.org/files/v3.31/cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          # Kitware's GitHub release (cmake.org's certificate failed to verify on the runner),
+          # checked against Kitware's published SHA-256 list.
+          base="https://github.com/Kitware/CMake/releases/download/v${CMAKE_PIN}"
+          f="cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$f" "$base/$f"
+          curl -fsSL -o "$RUNNER_TEMP/cmake-SHA-256.txt" "$base/cmake-${CMAKE_PIN}-SHA-256.txt"
+          (cd "$RUNNER_TEMP" && grep " $f\$" cmake-SHA-256.txt | shasum -a 256 -c -)
+          mv "$RUNNER_TEMP/$f" "$RUNNER_TEMP/cmake.tar.gz"
           tar -xzf "$RUNNER_TEMP/cmake.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/cmake-${CMAKE_PIN}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
 
