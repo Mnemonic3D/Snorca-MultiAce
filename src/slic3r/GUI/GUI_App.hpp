@@ -625,6 +625,7 @@ private:
     bool            switch_language();
     bool            load_language(wxString language, bool initial);
     std::string     gateway_locale() const;
+    static std::string normalize_language_tag(const std::string& raw);
 
 private:
     void            sync_gateway_region_after_wizard(const std::string& locale_before_wizard);

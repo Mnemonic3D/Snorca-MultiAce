@@ -61,6 +61,29 @@ WEBKIT_API WebKitUserContentManager *webkit_web_view_get_user_content_manager(We
 WEBKIT_API void webkit_user_content_manager_add_filter(WebKitUserContentManager *manager, WebKitUserContentFilter *filter);
 WEBKIT_API void webkit_user_content_manager_remove_filter(WebKitUserContentManager *manager, WebKitUserContentFilter *filter);
 }
+// SNORCA: page language. WebKitGTK derives navigator.languages from the process locale (LC_ALL/LC_CTYPE),
+// so LC_ALL=C.UTF-8 gives "C", which the Flutter pages pass to Intl.Locale -> "invalid language tag" and
+// the Home/Device pages do not start. The default context (the one wxWebView uses) is told the same
+// language the pages get in ?locale=, with en-US as fallback.
+struct WebKitWebContext;
+extern "C" {
+WEBKIT_API WebKitWebContext *webkit_web_context_get_default(void);
+WEBKIT_API void webkit_web_context_set_preferred_languages(WebKitWebContext *context, const gchar *const *languages);
+}
+static void apply_page_languages()
+{
+    static std::string applied;
+    std::string        tag = Slic3r::GUI::GUI_App::normalize_language_tag(Slic3r::GUI::wxGetApp().gateway_locale());
+    if (tag == applied)
+        return;
+    WebKitWebContext *context = webkit_web_context_get_default();
+    if (context == nullptr)
+        return;
+    const gchar *languages[3] = {tag.c_str(), tag == "en-US" ? nullptr : "en-US", nullptr};
+    webkit_web_context_set_preferred_languages(context, languages);
+    applied = tag;
+    BOOST_LOG_TRIVIAL(warning) << "SNORCA page language: " << tag;
+}
 #endif
 
 #ifdef __WIN32__
@@ -578,6 +601,7 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url, bool 
         webView->Create(parent, wxID_ANY, wxString("about:blank"), wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
         static_cast<WebViewWebKit *>(webView)->AttachNavigationGate();
 #elif defined(__linux__)
+        apply_page_languages();
         // SNORCA: an eligible view is created blank, gets the local-only filter, and only then
         // loads its first URL, so the filter is in place before the page can make any request.
         webView->Create(parent, wxID_ANY, local_only_eligible ? wxString("about:blank") : url2, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);

@@ -5792,15 +5792,58 @@ void GUI_App::start_page_http_server()
         m_page_http_server.start();
 }
 
+// SNORCA: turn a system locale or app language string into a valid BCP-47 tag.
+// "en_US.UTF-8" -> "en-US", "de_DE@euro" -> "de-DE", "zh_Hans_CN" -> "zh-Hans-CN", "C"/"POSIX"/"" -> "en".
+// Encoding (.xxx) and modifier (@xxx) are dropped; a subtag that is not a script or region ends the tag;
+// an unusable language subtag gives "en". Used for everything handed to the helper and the web pages.
+std::string GUI_App::normalize_language_tag(const std::string& raw)
+{
+    std::string s = raw.substr(0, raw.find_first_of(".@"));
+    const auto  first = s.find_first_not_of(" \t");
+    if (first == std::string::npos)
+        return "en";
+    s = s.substr(first, s.find_last_not_of(" \t") - first + 1);
+    if (boost::iequals(s, "C") || boost::iequals(s, "POSIX"))
+        return "en";
+    std::replace(s.begin(), s.end(), '_', '-');
+
+    auto all_of = [](const std::string& t, int (*pred)(int)) {
+        return !t.empty() && std::all_of(t.begin(), t.end(), [pred](unsigned char c) { return pred(c) != 0; });
+    };
+    std::vector<std::string> parts;
+    boost::split(parts, s, boost::is_any_of("-"));
+    std::string language = parts.empty() ? std::string{} : parts.front();
+    if (!all_of(language, isalpha) || !(language.size() == 2 || language.size() == 3 || (language.size() >= 5 && language.size() <= 8)))
+        return "en";
+    boost::to_lower(language);
+    std::string tag = language;
+    bool        have_script = false, have_region = false;
+    for (std::size_t i = 1; i < parts.size(); ++i) {
+        std::string part = parts[i];
+        if (!have_script && !have_region && part.size() == 4 && all_of(part, isalpha)) {
+            boost::to_lower(part);
+            part[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(part[0])));
+            have_script = true;
+        } else if (!have_region && ((part.size() == 2 && all_of(part, isalpha)) || (part.size() == 3 && all_of(part, isdigit)))) {
+            boost::to_upper(part);
+            have_region = true;
+        } else {
+            break;
+        }
+        tag += "-" + part;
+    }
+    return tag;
+}
+
+// Tag for the helper's --locale and the pages' ?locale=: the pages ship en-US and zh-CN only.
 std::string GUI_App::gateway_locale() const
 {
     std::string locale = app_config != nullptr ? app_config->get("language") : std::string{};
-    if (locale.empty())
+    if (locale.empty() && m_wxLocale != nullptr)
         locale = into_u8(current_language_code_safe());
 
-    const std::size_t separator = locale.find_first_of("-_");
-    std::string       language  = separator == std::string::npos ? locale : locale.substr(0, separator);
-    std::transform(language.begin(), language.end(), language.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    const std::string normalized = normalize_language_tag(locale);
+    std::string       language   = normalized.substr(0, normalized.find('-'));
     if (language != "zh")
         language = "en";
 
