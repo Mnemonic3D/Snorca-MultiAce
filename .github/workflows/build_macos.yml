@@ -109,17 +109,18 @@ jobs:
         run: |
           cmake --version
           chmod +x ./build_release_macos.sh
-          # Homebrew zstd collides with the deps build on the include path (as upstream does:
-          # remove it for the deps build only, put it back afterwards; Homebrew's curl needs it).
-          brew uninstall --ignore-dependencies zstd || true
+          # Homebrew zstd collides with the deps build on the include path. Upstream uninstalls it,
+          # but Homebrew's curl and git need libzstd, so only unlink it (headers and libraries leave
+          # /opt/homebrew/include and /lib; /opt/homebrew/opt/zstd stays for curl) and link it back.
+          brew unlink zstd || true
           ./build_release_macos.sh -d -x -a "${{ matrix.arch }}" -t "$OSX_DEPLOYMENT_TARGET" -c "$BUILD_CONFIG"
           test -d "deps/build/${{ matrix.arch }}/OrcaSlicer_dep/usr/local/lib"
           ls "deps/build/${{ matrix.arch }}/OrcaSlicer_dep/usr/local/lib" | grep -E '^lib(ssl|crypto)\.a$'
           du -sh "deps/build/${{ matrix.arch }}/OrcaSlicer_dep"
 
-      - name: Put Homebrew zstd back
+      - name: Link Homebrew zstd back
         if: always() && steps.cache.outputs.cache-hit != 'true'
-        run: brew install zstd || true
+        run: brew link zstd || true
 
       - name: Save dependency cache
         if: steps.cache.outputs.cache-hit != 'true'
