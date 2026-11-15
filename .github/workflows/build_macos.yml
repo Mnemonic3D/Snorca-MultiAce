@@ -1,0 +1,246 @@
+name: Build macOS disk images (unsigned)
+
+# Snorca MultiAce: macOS builds on GitHub's own Mac machines, one disk image per chip
+# (Apple Silicon arm64, Intel x86_64; the Intel one is cross-built on an Apple Silicon runner).
+# Modelled on Snapmaker Orca 2.4.1's macOS build (build_release_macos.sh, macos-15 runner),
+# without its signing, notarization, Sentry symbol upload and nightly-release upload.
+#
+# Runs when someone presses "Run workflow" in the Actions tab (or: gh workflow run
+# build_macos.yml), and on a push to the ci-windows-macos branch that changes this file.
+# No tag or schedule trigger; pushes to main never start it.
+# No secrets are used. Nothing is published: the results are workflow artifacts (kept 30 days).
+#
+# NOT SIGNED with an Apple developer identity and NOT notarized. The app is only ad-hoc signed
+# ("codesign --sign -", no identity, no secret), which Apple Silicon needs before it will start a
+# program at all. macOS will say the developer cannot be verified: right-click > Open, or
+# System Settings > Privacy & Security > Open Anyway.
+#
+#   1. deps job   : build_release_macos.sh -d  (long; cached afterwards, one cache per chip)
+#   2. slicer job : build_release_macos.sh -s, checks, ad-hoc sign, disk image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version text used in the file names (for example 2.4.1-fos.8.6.8-snorca.1)"
+        required: true
+        default: "2.4.1-fos.8.6.8-snorca.1"
+  push:
+    branches: [ci-windows-macos]
+    paths: [.github/workflows/build_macos.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # A push run has no inputs; fall back to the release version text.
+  VERSION: ${{ inputs.version || '2.4.1-fos.8.6.8-snorca.1' }}
+  BUILD_CONFIG: Release
+  OSX_DEPLOYMENT_TARGET: "12.0"
+  # CMake 4.x dropped compatibility with cmake_minimum_required(<3.5), which several
+  # dependency sources still declare. Upstream pins 3.28.x; 3.31.x is the last 3.x.
+  CMAKE_PIN: "3.31.6"
+
+jobs:
+  deps:
+    name: dependencies (${{ matrix.arch }})
+    runs-on: macos-15
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Must run before any cache action: actions/cache picks zstd or gzip by probing for
+      # zstd, and Homebrew zstd also collides with the deps build on the include path.
+      - name: Remove Homebrew zstd (before any cache action)
+        run: brew uninstall --ignore-dependencies zstd || true
+
+      - name: Compute dependency cache key
+        id: depkey
+        run: echo "key=snorcadeps-mac-${{ matrix.arch }}-${{ env.OSX_DEPLOYMENT_TARGET }}-${{ env.BUILD_CONFIG }}-${{ hashFiles('deps/**/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/*.patch', '!deps/build/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Look up dependency cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/build/${{ matrix.arch }}/OrcaSlicer_dep
+          key: ${{ steps.depkey.outputs.key }}
+          lookup-only: true
+
+      - name: Select Xcode and free disk space
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+          sw_vers
+          df -h /
+          XCODE_APP="$(cd "$(xcode-select -p)/../.." && pwd -P)"
+          for app in /Applications/Xcode_*.app; do
+            [ -e "$app" ] || continue
+            [ "$(cd "$app" && pwd -P)" = "$XCODE_APP" ] && continue
+            sudo rm -rf "$app"
+          done
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
+          df -h /
+
+      - name: Install pinned CMake ${{ env.CMAKE_PIN }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/cmake.tar.gz" "https://cmake.org/files/v3.31/cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          tar -xzf "$RUNNER_TEMP/cmake.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/cmake-${CMAKE_PIN}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+
+      - name: Install build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: brew install ninja automake autoconf libtool texinfo
+
+      - name: Build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cmake --version
+          chmod +x ./build_release_macos.sh
+          ./build_release_macos.sh -d -x -a "${{ matrix.arch }}" -t "$OSX_DEPLOYMENT_TARGET" -c "$BUILD_CONFIG"
+          test -d "deps/build/${{ matrix.arch }}/OrcaSlicer_dep/usr/local/lib"
+          ls "deps/build/${{ matrix.arch }}/OrcaSlicer_dep/usr/local/lib" | grep -E '^lib(ssl|crypto)\.a$'
+          du -sh "deps/build/${{ matrix.arch }}/OrcaSlicer_dep"
+
+      - name: Save dependency cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/build/${{ matrix.arch }}/OrcaSlicer_dep
+          key: ${{ steps.depkey.outputs.key }}
+
+  slicer:
+    name: slicer and disk image (${{ matrix.arch }})
+    needs: deps
+    runs-on: macos-15
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Remove Homebrew zstd (before any cache action)
+        run: brew uninstall --ignore-dependencies zstd || true
+
+      - name: Compute dependency cache key
+        id: depkey
+        run: echo "key=snorcadeps-mac-${{ matrix.arch }}-${{ env.OSX_DEPLOYMENT_TARGET }}-${{ env.BUILD_CONFIG }}-${{ hashFiles('deps/**/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/*.patch', '!deps/build/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/build/${{ matrix.arch }}/OrcaSlicer_dep
+          key: ${{ steps.depkey.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Select Xcode and free disk space
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+          XCODE_APP="$(cd "$(xcode-select -p)/../.." && pwd -P)"
+          for app in /Applications/Xcode_*.app; do
+            [ -e "$app" ] || continue
+            [ "$(cd "$app" && pwd -P)" = "$XCODE_APP" ] && continue
+            sudo rm -rf "$app"
+          done
+          df -h /
+
+      - name: Install pinned CMake ${{ env.CMAKE_PIN }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/cmake.tar.gz" "https://cmake.org/files/v3.31/cmake-${CMAKE_PIN}-macos-universal.tar.gz"
+          tar -xzf "$RUNNER_TEMP/cmake.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/cmake-${CMAKE_PIN}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+
+      - name: Install build tools
+        run: |
+          brew install ninja libtool gettext
+          echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+
+      - name: Build slicer
+        env:
+          # 3 cores / 7 GB on the runner; keep the compile from running out of memory.
+          CMAKE_BUILD_PARALLEL_LEVEL: "3"
+        run: |
+          cmake --version
+          chmod +x ./build_release_macos.sh ./scripts/run_gettext.sh
+          ./build_release_macos.sh -s -x -a "${{ matrix.arch }}" -t "$OSX_DEPLOYMENT_TARGET" -c "$BUILD_CONFIG"
+
+      # Snorca policy checks (hard failures): right chip, crash reporting built out, no
+      # analytics library in the staged Device page, our name on it, the helper staged.
+      - name: Check build
+        run: |
+          APP="build/${{ matrix.arch }}/FOrcaSlicer/FOrcaSlicer.app"
+          test -d "$APP" || { echo "::error::app bundle missing at $APP"; exit 1; }
+          lipo -archs "$APP/Contents/MacOS/FOrcaSlicer"
+          lipo -archs "$APP/Contents/MacOS/FOrcaSlicer" | grep -qx "${{ matrix.arch }}"
+          grep -E '^SLIC3R_SENTRY:BOOL=' "build/${{ matrix.arch }}/CMakeCache.txt"
+          grep -Eq '^SLIC3R_SENTRY:BOOL=(OFF|0|FALSE)$' "build/${{ matrix.arch }}/CMakeCache.txt" || { echo "::error::SLIC3R_SENTRY is not OFF"; exit 1; }
+          RES="$APP/Contents/Resources"
+          for h in snapmaker_control_macos_arm64 snapmaker_control_macos_x64; do
+            test -f "$RES/$h" || { echo "::error::helper $h missing"; exit 1; }
+            shasum -a 256 "$RES/$h"
+            file "$RES/$h"
+          done
+          WEB="$RES/web/flutter_web"
+          test -f "$WEB/index.html" || { echo "::error::flutter_web missing"; exit 1; }
+          if find "$WEB" -name 'posthog*.js' | grep -q .; then echo "::error::analytics library present"; exit 1; fi
+          if grep -qi posthog "$WEB/index.html"; then echo "::error::index.html mentions posthog"; exit 1; fi
+          grep -qF '<title>Snorca MultiAce</title>' "$WEB/index.html" || { echo "::error::Device page title is not Snorca MultiAce"; exit 1; }
+          echo "every Mach-O in the bundle and its chips:"
+          find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q 'Mach-O' || continue
+            printf '%s\t%s\n' "$(lipo -archs "$f" 2>/dev/null || echo unknown)" "${f#"$APP"/}"
+          done | sort
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist" || true
+
+      # Ad-hoc signature only (no identity, no secret): Apple Silicon refuses to start code
+      # that carries no signature at all. The helper programs in Resources keep the signature
+      # Snapmaker gave them; they are sealed into the bundle as resources.
+      - name: Ad-hoc sign (no developer identity)
+        run: |
+          APP="build/${{ matrix.arch }}/FOrcaSlicer/FOrcaSlicer.app"
+          for h in "$APP/Contents/Resources/snapmaker_control_macos_arm64" "$APP/Contents/Resources/snapmaker_control_macos_x64"; do
+            codesign -dv "$h" 2>&1 | grep -E 'Authority|Signature|TeamIdentifier|flags' || echo "$h: no signature"
+          done
+          xattr -cr "$APP" || true
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv "$APP" 2>&1 | grep -E 'Signature|Identifier|flags'
+
+      - name: Make disk image
+        id: dmg
+        run: |
+          APP="build/${{ matrix.arch }}/FOrcaSlicer/FOrcaSlicer.app"
+          NAME="Snorca_MultiAce_Mac_${{ matrix.arch }}_V${VERSION}"
+          STAGE="$RUNNER_TEMP/dmgstage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE" dist
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "Snorca MultiAce" -srcfolder "$STAGE" -ov -format UDZO -imagekey zlib-level=9 "dist/$NAME.dmg"
+          (cd dist && shasum -a 256 "$NAME.dmg" | tee "$NAME.dmg.sha256")
+          ls -l dist
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dmg.outputs.name }}
+          path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30

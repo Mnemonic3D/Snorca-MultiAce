@@ -1,8 +1,9 @@
 name: Build Windows installer and portable zip
 
 # Snorca MultiAce: Windows x64 build on GitHub's own Windows machines.
-# MANUAL ONLY: runs only when someone presses "Run workflow" in the Actions tab
-# (or: gh workflow run build_windows.yml). No push, tag or schedule trigger.
+# Runs when someone presses "Run workflow" in the Actions tab (or: gh workflow run
+# build_windows.yml), and on a push to the ci-windows-macos branch that changes this
+# file. No tag or schedule trigger; pushes to main never start it.
 # No secrets are used. Nothing is published: the results are workflow artifacts
 # (kept 30 days); attaching them to a Release is a separate, manual step.
 #
@@ -19,6 +20,9 @@ on:
         description: "Version text used in the file names (for example 2.4.1-fos.8.6.8-snorca.1)"
         required: true
         default: "2.4.1-fos.8.6.8-snorca.1"
+  push:
+    branches: [ci-windows-macos]
+    paths: [.github/workflows/build_windows.yml]
 
 permissions:
   contents: read
@@ -26,6 +30,10 @@ permissions:
 concurrency:
   group: windows-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  # A push run has no inputs; fall back to the release version text.
+  VERSION: ${{ inputs.version || '2.4.1-fos.8.6.8-snorca.1' }}
 
 jobs:
   deps:
@@ -117,12 +125,32 @@ jobs:
       - name: Build installer and portable zip
         shell: pwsh
         run: |
-          .\build_installer.ps1 -Version "${{ inputs.version }}" -SourceDir .\build\Snapmaker_Orca -OutDir .\dist
+          .\build_installer.ps1 -Version "${{ env.VERSION }}" -SourceDir .\build\Snapmaker_Orca -OutDir .\dist
           Get-ChildItem dist | ForEach-Object {
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$h  $($_.Name)" | Out-File -FilePath "$($_.FullName).sha256" -Encoding ascii
             "$h  $($_.Name)"
           }
+
+      # Snorca policy checks (hard failures): crash reporting built out, no analytics
+      # library in the staged Device page, our name on it, the helper staged.
+      - name: Check telemetry cuts and staged helper
+        shell: pwsh
+        run: |
+          $cache = Get-Content build\CMakeCache.txt
+          $sentry = ($cache | Select-String -Pattern '^SLIC3R_SENTRY:BOOL=' | Select-Object -First 1).Line
+          "CMakeCache: $sentry"
+          if ($sentry -notmatch '^SLIC3R_SENTRY:BOOL=(OFF|0|FALSE)$') { throw "SLIC3R_SENTRY is not OFF" }
+          $res = "build\Snapmaker_Orca\resources"
+          if (-not (Test-Path "$res\snapmaker_control_windows_x64.exe")) { throw "helper snapmaker_control_windows_x64.exe missing in $res" }
+          (Get-FileHash "$res\snapmaker_control_windows_x64.exe" -Algorithm SHA256).Hash.ToLower() + "  helper"
+          $web = "$res\web\flutter_web"
+          if (-not (Test-Path "$web\index.html")) { throw "flutter_web missing in $res" }
+          $ph = Get-ChildItem $web -Recurse -Filter "posthog*.js"
+          if ($ph) { throw "analytics library still present: $($ph.FullName)" }
+          if (Select-String -Path "$web\index.html" -Pattern "posthog" -Quiet) { throw "index.html still mentions posthog" }
+          if (-not (Select-String -Path "$web\index.html" -Pattern "<title>Snorca MultiAce</title>" -SimpleMatch -Quiet)) { throw "Device page title is not Snorca MultiAce" }
+          "telemetry cuts and helper OK"
 
       # Payload check (warning only, so a long build is never thrown away by it).
       - name: Check payload
@@ -138,7 +166,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Snorca_MultiAce_Windows_Installer_V${{ inputs.version }}
+          name: Snorca_MultiAce_Windows_Installer_V${{ env.VERSION }}
           path: |
             dist/*.exe
             dist/*.exe.sha256
@@ -148,7 +176,7 @@ jobs:
       - name: Upload portable zip
         uses: actions/upload-artifact@v4
         with:
-          name: Snorca_MultiAce_Windows_Portable_V${{ inputs.version }}
+          name: Snorca_MultiAce_Windows_Portable_V${{ env.VERSION }}
           path: |
             dist/*.zip
             dist/*.zip.sha256
