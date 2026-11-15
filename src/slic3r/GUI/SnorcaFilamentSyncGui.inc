@@ -195,6 +195,15 @@ void Sidebar::sync_snorca_filaments(bool manual)
         }
     }
     catch(const std::exception& e){p->snorca_sync_status->SetLabel(wxString::FromUTF8(std::string("Sync retained palette: ")+e.what()));return;}
+    // SNORCA (2026-11-15): Auto never takes the printer connection away from another printer (the Device tab's).
+    // It waits; the sync button (an explicit request) still connects to the Prepare printer as before.
+    if(!manual&&!SnorcaPrinterConnect::connected(selected_printer.device)&&SnorcaPrinterConnect::other_printer_connected(selected_printer.device)){ // SNORCA
+        const wxString l=wxString::FromUTF8("Auto waits: the Device tab is connected to another printer"); // SNORCA
+        const wxString t=wxString::FromUTF8("Auto sync does not take the printer connection away from the Device tab. Palette retained.\nSelect "+preset_name+" in the Device tab, or press the sync button to connect to it."); // SNORCA
+        if(p->snorca_sync_status->GetLabel()!=l){p->snorca_sync_status->SetLabel(l);Layout();} // SNORCA
+        if(p->snorca_sync_status->GetToolTipText()!=t)p->snorca_sync_status->SetToolTip(t); // SNORCA
+        snorca_sync_log(false,preset_name,address,"Auto waits: Device tab connected to another printer; palette retained.",""); // SNORCA
+        return;} // SNORCA
     if(p->snorca_sync_thread.joinable())p->snorca_sync_thread.join();
     p->snorca_sync_busy=true; // SNORCA: no "Reading…" text every 10 s; the line changes only when the result changes
     Sidebar* self=this;auto alive=p->snorca_sync_alive;auto generation=p->snorca_sync_generation;const uint64_t ticket=++(*generation);
@@ -228,6 +237,10 @@ void Sidebar::sync_snorca_filaments(bool manual)
             if(generation->load()!=ticket){status("Connection/sync request superseded; palette retained.");return;}
             std::shared_ptr<PrintHost> current_host;wxGetApp().get_connect_host(current_host);
             if(current_host!=original_host&&!SnorcaPrinterConnect::connected(device)){status("Device connection changed during sync; old request discarded.");return;}
+            // SNORCA (2026-11-15): another printer connected while Auto was preparing (Device tab switch): drop ours, keep theirs.
+            if(!manual&&!SnorcaPrinterConnect::connected(device)&&SnorcaPrinterConnect::other_printer_connected(device)){ // SNORCA
+                if(connection->engine){std::string ignored;connection->engine->Disconnect(ignored,200);connection->engine.reset();}connection->host.reset();connection->ok=false; // SNORCA
+                status("Auto waits: Device tab connected to another printer; palette retained.");return;} // SNORCA
             if(!SnorcaPrinterConnect::connected(device)&&!already_connected&&connection->ok){std::string message;if(!SnorcaPrinterConnect::install(*connection,message))connection->error=message;else self->update_all_preset_comboboxes(false);}
             if(SnorcaPrinterConnect::connected(device))connection_note=" Connected to "+address+".";
             else {

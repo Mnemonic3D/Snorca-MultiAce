@@ -42,6 +42,19 @@ inline bool connected(const DeviceInfo& device)
 }
 inline bool matching_connected(const DeviceInfo& device) { return connected(device); }
 
+// SNORCA (2026-11-15): true when a live native printer connection exists for a printer OTHER
+// than `device` (normally the one picked in the Device tab). Auto filament sync must not take
+// that connection over: adopting its own engine disconnects the Device tab's printer, whose
+// page then reports "Network unstable" and falls back to the Prepare printer.
+inline bool other_printer_connected(const DeviceInfo& device)
+{
+    std::shared_ptr<PrintHost> current; wxGetApp().get_connect_host(current);
+    const auto host = std::dynamic_pointer_cast<Moonraker_Mqtt>(current);
+    if (!host || !host->has_connected_engine()) return false;
+    std::lock_guard<std::mutex> lock(Moonraker_Mqtt::m_sn_mtx);
+    return Moonraker_Mqtt::m_sn != device.sn;
+}
+
 // GUI-thread refresh of display state only. Pairing identity, credentials and
 // printer preset values are retained byte-for-byte. Never inserts a device.
 inline bool refresh_device_flags()
