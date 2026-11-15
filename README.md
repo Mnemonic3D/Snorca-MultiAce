@@ -80,6 +80,8 @@ Those two projects are made by other people; follow their instructions to instal
 
 Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases)**.
 
+**Fix, 15 November (Linux):** if switching printers in the Device tab jumped back to the Prepare printer with Auto sync on, use the `Snorca-MultiAce-2.3.2-snorca.3-switchfix-linux-x86_64.tar.xz` file from the [snorca.3 release](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.3.2-snorca.3). Windows files do not have this fix yet.
+
 | System | What to download |
 |---|---|
 | **Linux** (64-bit) | The `...linux-x86_64.tar.xz` file. Unpack it and run `AppRun`. |
