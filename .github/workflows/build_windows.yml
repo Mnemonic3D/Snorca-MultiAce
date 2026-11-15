@@ -153,6 +153,14 @@ jobs:
           Select-String -Path "$web\index.html" -Pattern "posthog" | ForEach-Object { "note: $($_.Line.Trim())" }
           if (-not (Select-String -Path "$web\index.html" -Pattern "<title>Snorca MultiAce</title>" -SimpleMatch -Quiet)) { throw "Device page title is not Snorca MultiAce" }
           "telemetry cuts and helper OK"
+          # The portable zip must carry the same web files as the installer (resources\web\include).
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = Get-ChildItem dist -Filter *.zip | Select-Object -First 1
+          $z = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          $n = @($z.Entries | Where-Object { $_.FullName -match '^[^/\\]+[/\\]resources[/\\]web[/\\]include[/\\]' }).Count
+          $z.Dispose()
+          "portable zip: $n files under resources/web/include"
+          if ($n -lt 1) { throw "portable zip lacks resources/web/include" }
 
       # Payload check (warning only, so a long build is never thrown away by it).
       - name: Check payload

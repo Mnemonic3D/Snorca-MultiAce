@@ -99,9 +99,14 @@ if (-not $SkipZip) {
         "*.vcxproj","*.vcxproj.filters","*.vcxproj.user","*.sln",
         "*.cmake","*.py","*.md"
     )
+    # "include" and "lib" only at the top of the payload, as installer.nsi does (/x "include\*"
+    # /x "lib\*"); by bare name robocopy also dropped resources\web\include (jQuery, globalapi.js,
+    # swiper), which the built-in web pages load.
+    $srcFull = (Resolve-Path $SourceDir).Path
     $excludeDirs = @(
         "CMakeFiles","RelWithDebInfo","Debug","MinSizeRel",".vs",
-        "vcpkg_installed","include","lib"
+        "vcpkg_installed",
+        (Join-Path $srcFull "include"), (Join-Path $srcFull "lib")
     )
 
     # robocopy: 8 = first bit that means "real failure"; 0-7 are success//copied/extra
