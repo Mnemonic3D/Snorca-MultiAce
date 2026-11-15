@@ -1439,10 +1439,10 @@ wxWindow* PreferencesDialog::create_general_page()
 
     hyperlink->SetFont(Label::Head_13);
     item_priv_policy->Add(hyperlink, 0, wxALIGN_CENTER, 0);
-    // SNORCA: "Hide online models", on by default (app_config fos_hide_online_models).
-    auto item_hide_online_models = create_item_checkbox(_L("Hide online models (Home and Device pages stay offline)"), page,
+    // SNORCA: "Hide online models", off by default (app_config fos_hide_online_models).
+    auto item_hide_online_models = create_item_checkbox(_L("Hide online models (Home and Device pages offline, no Snapmaker sign-in)"), page,
         WebView::LocalOnlySupported() ?
-            _L("On by default. The Home and Device pages may then only connect to this computer and the local network: no online model list, pictures or web fonts. Untick to allow them online.") :
+            _L("Off by default. When ticked, the Home and Device pages may only connect to this computer and the local network: no Snapmaker sign-in, no online model library, pictures or web fonts. Local printers keep working.") :
             _L("Not available on this system in this build: the Home page may still load the online model list."),
         50, "fos_hide_online_models");
 

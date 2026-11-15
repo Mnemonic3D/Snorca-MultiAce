@@ -423,10 +423,11 @@ void AppConfig::set_defaults()
         set_bool("send_usage_data", false);
     }
 
-    // SNORCA: "Hide online models" is on unless the user unticks it in Preferences: the Home and
-    // Device pages then make no connection outside this computer and the local network.
+    // SNORCA: "Hide online models" is OFF by default, so Snapmaker sign-in and the online model
+    // library on the Home/Device pages work as in Snapmaker Orca. When the user ticks it in
+    // Preferences, those pages make no connection outside this computer and the local network.
     if (get("fos_hide_online_models").empty()) {
-        set_bool("fos_hide_online_models", true);
+        set_bool("fos_hide_online_models", false);
     }
 
     if (get("backup_switch").empty() || get("version") < "01.06.00.00") {
