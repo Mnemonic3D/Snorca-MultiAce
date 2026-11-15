@@ -220,6 +220,33 @@ def strip_analytics(web_dir: Path) -> None:
             raise RuntimeError("index.html still loads an analytics script")
 
 
+# SNORCA: the staged bundle is Snapmaker's, so put our program name back in the two places the
+# repo copy had it: the page title/description, and the English printer error texts that say
+# "use G-code files exported by Snapmaker Orca". Plain text replacements; nothing else changes.
+SNORCA_NAME = "Snorca MultiAce"
+
+
+def brand_snorca(web_dir: Path) -> None:
+    index_path = web_dir / "index.html"
+    if index_path.is_file():
+        text = index_path.read_text(encoding="utf-8")
+        branded = text.replace("<title>Snapmaker Orca</title>", f"<title>{SNORCA_NAME}</title>")
+        branded = branded.replace('<meta name="description" content="Snapmaker Orca">',
+                                  f'<meta name="description" content="{SNORCA_NAME}">')
+        if branded != text:
+            with index_path.open("w", encoding="utf-8", newline="") as out:
+                out.write(branded)
+            print(f"Named the page {SNORCA_NAME} in index.html")
+    english = web_dir / "assets" / "assets" / "i10n" / "en.json"
+    if english.is_file():
+        text = english.read_text(encoding="utf-8")
+        branded = text.replace("exported by Snapmaker Orca", f"exported by {SNORCA_NAME}")
+        if branded != text:
+            with english.open("w", encoding="utf-8", newline="") as out:
+                out.write(branded)
+            print(f"Named {SNORCA_NAME} in {text.count('exported by Snapmaker Orca')} English printer messages")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", default=".github/connect-bundle.lock.json", help="connect bundle lock file")
@@ -265,6 +292,7 @@ def main() -> int:
         remove_stale_cli_files(resources_dir, asset_keys)
         replace_directory(web_sources[0], resources_dir / "web" / "flutter_web", resources_dir)
         strip_analytics(resources_dir / "web" / "flutter_web")
+        brand_snorca(resources_dir / "web" / "flutter_web")
 
     print(f"Staged connect CLI and flutter_web into {resources_dir}")
     return 0

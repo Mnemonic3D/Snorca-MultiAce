@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version text used in the file names (for example 2.3.2-fos.8.6.8-snorca.1)"
+        description: "Version text used in the file names (for example 2.4.1-fos.8.6.8-snorca.1)"
         required: true
-        default: "2.3.2-fos.8.6.8-snorca.1"
+        default: "2.4.1-fos.8.6.8-snorca.1"
 
 permissions:
   contents: read

@@ -43,10 +43,16 @@ RequestExecutionLevel admin
 SetCompressor lzma
 
 ;SNORCA merge v2.4.1: numeric file version follows version.inc (Snapmaker_VERSION), like the app; build part via /DVERSION_BUILD=n
+;SNORCA: VERSION may be a release name such as 2.4.1-fos.8.6.8-snorca.1 (build_installer.ps1 passes it),
+;which VIProductVersion rejects (it needs four numbers), so the numeric part is always read from version.inc.
+!searchparse /noerrors /file "version.inc" `set(Snapmaker_VERSION "` VERSION_NUMERIC `")`
+!ifndef VERSION_NUMERIC
+    !error "Snapmaker_VERSION (x.y.z) not found in version.inc."
+!endif
 !ifndef VERSION_BUILD
     !define VERSION_BUILD "0"
 !endif
-VIProductVersion "${VERSION}.${VERSION_BUILD}"
+VIProductVersion "${VERSION_NUMERIC}.${VERSION_BUILD}"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "Comments" "Snorca MultiAce is an open source slicer for the Snapmaker U1 with multiACE, based on FOrcaSlicer"
 VIAddVersionKey "CompanyName" "${PRODUCT_PUBLISHER}"
