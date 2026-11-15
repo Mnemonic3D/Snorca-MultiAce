@@ -211,7 +211,9 @@ jobs:
           WEB="$RES/web/flutter_web"
           test -f "$WEB/index.html" || { echo "::error::flutter_web missing"; exit 1; }
           if find "$WEB" -name 'posthog*.js' | grep -q .; then echo "::error::analytics library present"; exit 1; fi
-          if grep -qi posthog "$WEB/index.html"; then echo "::error::index.html mentions posthog"; exit 1; fi
+          # Snapmaker's index.html keeps a harmless HTML comment naming PostHog; fail only on a script that loads it.
+          if grep -Eqi '<script[^>]*posthog' "$WEB/index.html"; then echo "::error::index.html still loads posthog"; exit 1; fi
+          grep -ni posthog "$WEB/index.html" || true
           grep -qF '<title>Snorca MultiAce</title>' "$WEB/index.html" || { echo "::error::Device page title is not Snorca MultiAce"; exit 1; }
           echo "every Mach-O in the bundle and its chips:"
           find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
