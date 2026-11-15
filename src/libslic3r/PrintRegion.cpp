@@ -2,7 +2,18 @@
 #include "Print.hpp"
 #include <boost/log/trivial.hpp>
 
+#include <cmath>
+
 namespace Slic3r {
+
+namespace {
+
+bool internal_solid_infill_uses_sparse_filament(const PrintRegionConfig &config, FlowRole role)
+{
+    return role == frSolidInfill && std::abs(config.sparse_infill_density.value - 100.) < EPSILON;
+}
+
+} // namespace
 
 // 1-based extruder identifier for this region and role.
 unsigned int PrintRegion::extruder(FlowRole role) const
@@ -14,7 +25,9 @@ unsigned int PrintRegion::extruder(FlowRole role) const
         extruder = m_config.inner_wall_filament;
     else if (role == frInfill)
         extruder = m_config.sparse_infill_filament;
-    else if (role == frSolidInfill || role == frTopSolidInfill)
+    else if (role == frSolidInfill)
+        extruder = internal_solid_infill_uses_sparse_filament(m_config, role) ? m_config.sparse_infill_filament : m_config.solid_infill_filament;
+    else if (role == frTopSolidInfill)
         extruder = m_config.solid_infill_filament;
     else
         throw Slic3r::InvalidArgument("Unknown role");
@@ -22,6 +35,11 @@ unsigned int PrintRegion::extruder(FlowRole role) const
 }
 
 Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer) const
+{
+    return this->flow(object, role, layer_height, first_layer, this->extruder(role));
+}
+
+Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer, unsigned int extruder_1based) const
 {
     const PrintConfig          &print_config = object.print()->config();
     ConfigOptionFloatOrPercent config_width;
@@ -36,7 +54,7 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
     bool fos_l1_stamped = false;
     if (first_layer) {
         const std::vector<double> &fos_arr = object.config().fos_nozzle_initial_layer_line_width.values;
-        const int fos_idx = int(this->extruder(role)) - 1;
+        const int fos_idx = int(extruder_1based) - 1;
         if (fos_idx >= 0 && fos_idx < (int) fos_arr.size()) {
             fos_l1_array = true;
             if (fos_arr[fos_idx] > 0) {
@@ -69,7 +87,7 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
     if (config_width.value == 0)
         config_width = object.config().line_width;
 
-    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(this->extruder(role) - 1));
+    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(extruder_1based - 1));
 
     // FOS 8.6: LEGACY fallback only - a config whose fos_nozzle_initial_layer_line_width
     // array is absent (pre-8.6 project, no GUI pass) still carries the print-scope scalar,
@@ -94,7 +112,7 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
     // painted loop gets its nozzle authored width. Feature regions: extruder(role) == the stamped
     // filament, so this is a no-op. First layer takes the ratio-scale above instead of this block.
     if (print_config.has_mixed_nozzle_sizes.value && !(first_layer && print_config.initial_layer_line_width.value > 0)) {
-        const int fos_idx = int(this->extruder(role)) - 1;
+        const int fos_idx = int(extruder_1based) - 1;
         const ConfigOptionFloats *fos_arr =
             (role == frExternalPerimeter) ? &m_config.fos_nozzle_outer_wall_line_width :
             (role == frPerimeter)         ? &m_config.fos_nozzle_inner_wall_line_width :
@@ -113,7 +131,7 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
 coordf_t PrintRegion::nozzle_dmr_avg(const PrintConfig &print_config) const
 {
     return (print_config.nozzle_diameter.get_at(m_config.wall_filament.value    - 1) + 
-            print_config.nozzle_diameter.get_at(m_config.sparse_infill_filament.value       - 1) + 
+            print_config.nozzle_diameter.get_at(m_config.sparse_infill_filament.value - 1) +
             print_config.nozzle_diameter.get_at(m_config.solid_infill_filament.value - 1)) / 3.;
 }
 
@@ -136,7 +154,7 @@ void PrintRegion::collect_object_printing_extruders(const PrintConfig &print_con
     	emplace_extruder(region_config.inner_wall_filament);
     }
     if (region_config.sparse_infill_density.value > 0)
-    	emplace_extruder(region_config.sparse_infill_filament);
+        emplace_extruder(region_config.sparse_infill_filament);
     if (region_config.top_shell_layers.value > 0 || region_config.bottom_shell_layers.value > 0)
     	emplace_extruder(region_config.solid_infill_filament);
 }

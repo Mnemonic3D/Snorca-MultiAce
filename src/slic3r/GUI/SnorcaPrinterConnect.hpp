@@ -74,7 +74,9 @@ inline bool refresh_device_flags()
             changed = true;
         }
     }
-    if (changed) wxGetApp().device_card_notify(Json(devices));
+    // Upstream 2.4.1 removed the device-card subscription channel (device cards now come
+    // from the connection gateway), so there is no page to push the list to; callers
+    // refresh the preset lists from the return value.
     return changed;
 }
 
@@ -151,7 +153,7 @@ inline Ready prepare(const DeviceInfo& device, const DynamicPrintConfig& selecte
             throw std::runtime_error("A unique saved LAN printer pairing is required.");
         budget(1);
         const std::string temporary_id = "orca-try-snorca-" + std::to_string(detail::request_id());
-        plain = std::make_shared<MqttClient>("mqtt://" + device.ip + ":1884", temporary_id, "", "", true);
+        plain = MqttClient::create("mqtt://" + device.ip + ":1884", temporary_id, "", "", true);
         std::string message;
         if (!plain->Connect(message, budget(2500))) throw std::runtime_error("Printer LAN authorization service is unavailable.");
         // These are the existing official native LAN configuration topics. No new
@@ -167,7 +169,7 @@ inline Ready prepare(const DeviceInfo& device, const DynamicPrintConfig& selecte
         const auto cert = detail::bounded_string(auth, "cert", 65536);
         const auto key = detail::bounded_string(auth, "key", 65536);
         detail::stop(plain); plain.reset(); budget(1);
-        ready.engine = std::make_shared<MqttClient>("ssl://" + device.ip + ":8883", client, ca, cert, key, "", "", false);
+        ready.engine = MqttClient::create("ssl://" + device.ip + ":8883", client, ca, cert, key, "", "", false);
         if (!ready.engine->Connect(message, budget(3500))) throw std::runtime_error("Printer secure LAN connection failed.");
         // A successful TLS CONNECT alone is insufficient: prove the exact serial
         // response channel answers a read-only native status RPC before adoption.

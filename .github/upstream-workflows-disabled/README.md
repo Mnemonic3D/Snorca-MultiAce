@@ -5,3 +5,4 @@ GitHub only runs files inside `.github/workflows/`, so nothing in this folder ru
 `sync-to-gitea.yml` in particular pushes to the upstream author's own mirror and must never be enabled here.
 The Snorca MultiAce builds are in `.github/workflows/` and start only when "Run workflow" is pressed.
 - `dependabot.yml` (automatic dependency-update pull requests) is also parked here so nothing starts by itself.
+- `coverage.yml`, `sanitizer-tests.yml`, `test-linux.yml` came with the Snapmaker Orca v2.4.1 merge (manual-only test pipelines) and are parked here too.

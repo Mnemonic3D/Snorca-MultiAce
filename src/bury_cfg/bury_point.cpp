@@ -4,7 +4,8 @@
 #include <iomanip>
 #include <sstream>
 
-static std::atomic<bool> isAgreeSlice(true);
+// SNORCA: no usage data until the settings say yes (was true = "counts as yes until read").
+static std::atomic<bool> isAgreeSlice(false);
 
 static std::atomic<bool> g_sentry_initialized(false);
 

@@ -211,6 +211,7 @@ function build_deps() {
                     cmake "${DEPS_DIR}" \
                         -G "${DEPS_CMAKE_GENERATOR}" \
                         -DDESTDIR="$DEPS" \
+                        -DSLIC3R_SENTRY=OFF \
                         -DOPENSSL_ARCH="darwin64-${_ARCH}-cc" \
                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
                         -DCMAKE_OSX_ARCHITECTURES:STRING="${_ARCH}" \
@@ -233,6 +234,12 @@ function pack_deps() {
 }
 
 function build_slicer() {
+    echo "Staging snapmaker_connect..."
+    python3 "${PROJECT_DIR}/scripts/packaging/stage_connect_bundle.py" \
+        --lock "${PROJECT_DIR}/.github/connect-bundle.lock.json" \
+        --platform macos-universal \
+        --resources-dir "${PROJECT_DIR}/resources"
+
     # iterate over two architectures: x86_64 and arm64
     for _ARCH in x86_64 arm64; do
         # if ARCH is universal or equal to _ARCH
@@ -252,6 +259,7 @@ function build_slicer() {
                 cmake "${PROJECT_DIR}" \
                     -G "${SLICER_CMAKE_GENERATOR}" \
                     -DBBL_RELEASE_TO_PUBLIC=1 \
+                    -DSLIC3R_SENTRY=OFF \
                     -DORCA_TOOLS=ON \
                     ${ORCA_UPDATER_SIG_KEY:+-DORCA_UPDATER_SIG_KEY="$ORCA_UPDATER_SIG_KEY"} \
                     -DCMAKE_PREFIX_PATH="$DEPS/usr/local" \

@@ -8,6 +8,7 @@
 #include "Thread.hpp"
 #include "format.hpp"
 #include "nlohmann/json.hpp"
+#include "common_func/common_func.hpp"
 
 #include <utility>
 #include <vector>
@@ -37,20 +38,26 @@ using namespace nlohmann;
 
 namespace Slic3r {
 
-static const std::string VERSION_CHECK_URL_STABLE = "https://api.github.com/repos/Snapmaker/OrcaSlicer/releases/latest";
-static const std::string VERSION_CHECK_URL = "https://api.github.com/repos/Snapmaker/OrcaSlicer/releases";
+static const std::string VERSION_CHECK_URL_STABLE = ""; // SNORCA: update checks removed
+static const std::string VERSION_CHECK_URL = "";        // SNORCA: update checks removed
 static const std::string PROFILE_UPDATE_URL = "/upgrade/profile/";
-static const std::string FLUTTER_UPDATE_URL = "/upgrade/flutter/";
 static const std::string MODELS_STR = "models";
 
 // FOS: primary update metadata rides on GitHub Pages for both regions. Region here is a
 // user-declared setting, not geolocation, so it is not trustworthy for CN routing; the
 // fallback below is selected by REACHABILITY instead, which is the real GFW signal.
-#define APP_UPDATE_URL_BASE_CN "https://jiyang1018.github.io/FOrcaSlicer"
-#define APP_UPDATE_URL_BASE_EN "https://jiyang1018.github.io/FOrcaSlicer"
+#define APP_UPDATE_URL_BASE_CN "" // SNORCA: update checks removed
+#define APP_UPDATE_URL_BASE_EN "" // SNORCA: update checks removed
 // FOS: small self-hosted checker, used only when the primary is unreachable. Serves JSON
 // only - never installer bytes. Its file_url points at the CN download-options page.
-#define APP_UPDATE_URL_BASE_FALLBACK "https://fos-release.design4paragon.com"
+#define APP_UPDATE_URL_BASE_FALLBACK "" // SNORCA: update checks removed
+
+// snapmaker-config gray release API (POST /config/get). Release builds default to the
+// https prod endpoint; internal testing builds (BBL_INTERNAL_TESTING, flipped together
+// with BBL_RELEASE_TO_PUBLIC in common_func.hpp) default to the http dev gateway, which
+// resolves only inside the office network. Per-machine override: "orca_config_api_url".
+#define CONFIG_API_URL_DEV  "" // SNORCA: update checks removed
+#define CONFIG_API_URL_PROD "" // SNORCA: update checks removed
 
 #if defined(_WIN32)
 static const std::string APP_UPDATE_URL = std::string("/upgrade/orca/win/");
@@ -219,6 +226,9 @@ void AppConfig::set_defaults()
     if (get("zoom_to_mouse").empty())
         set_bool("zoom_to_mouse", false);
 
+    if (get("gcode_preview_gpu_accel").empty())
+        set_bool("gcode_preview_gpu_accel", true);
+
 //#ifdef SUPPORT_SHOW_HINTS
     if (get("show_hints").empty())
         set_bool("show_hints", true);
@@ -231,9 +241,6 @@ void AppConfig::set_defaults()
 
     if (get("show_3d_navigator").empty())
         set_bool("show_3d_navigator", true);
-
-    if (get("show_outline").empty())
-        set_bool("show_outline", false);
 
 #ifdef _WIN32
 
@@ -333,6 +340,10 @@ void AppConfig::set_defaults()
         set_bool("auto_calculate_when_filament_change", true);
     }
 
+    if (get("auto_generate_gradients").empty()) {
+        set_bool("auto_generate_gradients", false);
+    }
+
     if (get("show_home_page").empty()) {
         set_bool("show_home_page", true);
     }
@@ -401,9 +412,22 @@ void AppConfig::set_defaults()
     //     set_bool("staff_pick_switch", false);
     // }
 
-    // FOS: disable auto-sync — Snapmaker server presets are 2.3.14 format, incompatible with FOrcaSlicer 2.3.2
-    if (get("sync_system_preset").empty()) {
-        set_bool("sync_system_preset", false);
+    // SNORCA: no profile/preset downloads from the internet. Forced off every start
+    // (the Preferences item is removed), so an old "true" in the ini cannot revive it.
+    set_bool("sync_system_preset", false);
+
+    // SNORCA: usage data (telemetry) is off unless the user ticks
+    // Preferences > "Send usage data (telemetry)". New key on purpose: an old
+    // privacy_policy_isagree=true from an earlier build does not carry over.
+    if (get("send_usage_data").empty()) {
+        set_bool("send_usage_data", false);
+    }
+
+    // SNORCA: "Hide online models" is OFF by default, so Snapmaker sign-in and the online model
+    // library on the Home/Device pages work as in Snapmaker Orca. When the user ticks it in
+    // Preferences, those pages make no connection outside this computer and the local network.
+    if (get("fos_hide_online_models").empty()) {
+        set_bool("fos_hide_online_models", false);
     }
 
     if (get("backup_switch").empty() || get("version") < "01.06.00.00") {
@@ -705,9 +729,11 @@ std::string AppConfig::load()
             }
         }
 
-        // SM Orca
-        if (j.contains("devices")) {
-            m_device_list = j["devices"].get<std::vector<DeviceInfo>>();
+        // Upstream v2.4.1: device ownership belongs to the connection gateway.
+        // SNORCA: the multiACE connect code still uses the AppConfig device list, so keep loading it.
+        if (j.contains("devices") && j["devices"].is_array()) {
+            try { m_device_list = j["devices"].get<std::vector<DeviceInfo>>(); }
+            catch (const std::exception&) { m_device_list.clear(); } // a bad device entry must not fail the whole config load
         }
     } catch(std::exception err) {
         BOOST_LOG_TRIVIAL(info) << format("parse app config \"%1%\", error: %2%", AppConfig::loading_path(), err.what());
@@ -835,11 +861,6 @@ void AppConfig::save()
             continue;
         }
         for (const auto& kvp : category.second) {
-            // SM Orca
-            if (kvp.first == "use_new_connect") {
-                j[category.first][kvp.first] = false;
-                continue;
-            }
             if (kvp.second == "true") {
                 j[category.first][kvp.first] = true;
                 continue;
@@ -877,15 +898,12 @@ void AppConfig::save()
     }
 
     j["devices"] = json::array();
+    // SNORCA: persist LAN devices for the multiACE connect code (never WAN entries).
     for (size_t i = 0; i < m_device_list.size(); ++i) {
         if (m_device_list[i].link_mode != "wan") {
             j["devices"].push_back(m_device_list[i]);
         }
     }
-
-    // j["devices"] = m_device_list;
-
-
     for (size_t i = 0; i < j["devices"].size(); ++i) {
         j["devices"][i]["connected"] = false;
     }
@@ -1453,6 +1471,8 @@ std::string AppConfig::config_path()
 
 std::string AppConfig::get_preset_upgrade_url() 
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     std::string resourceUrl = get("profile_upgrade_url");
     
     if(!resourceUrl.empty())
@@ -1469,27 +1489,10 @@ std::string AppConfig::get_preset_upgrade_url()
     return url;
 }
 
-std::string AppConfig::get_web_resource_upgrade_url()
-{
-    
-    std::string resourceUrl = get("flutter_upgrade_url");
-    
-    if(!resourceUrl.empty())
-        return resourceUrl;
-    
-    std::string localLanguage = get("language");
-    if (localLanguage != "zh_CN")
-        localLanguage = "en";
-    std::string url  = APP_UPDATE_URL_BASE_EN + FLUTTER_UPDATE_URL + localLanguage + std::string("/version.json");
-    auto countryArea = get_country_code();
-    if (countryArea == std::string("CN"))
-        url = APP_UPDATE_URL_BASE_CN + FLUTTER_UPDATE_URL + localLanguage + std::string("/version.json");
-
-    return url;
-}
-
 std::string AppConfig::get_version_upgrade_url(bool stable_only /* = false*/) 
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     
     std::string resourceUrl = get("orca_upgrade_url");
     
@@ -1512,6 +1515,8 @@ std::string AppConfig::get_version_upgrade_url(bool stable_only /* = false*/)
 // primary is the GFW signal, so this copy advertises CN-reachable download options.
 std::string AppConfig::get_version_fallback_url()
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     std::string resourceUrl = get("orca_upgrade_fallback_url");
     if (!resourceUrl.empty())
         return resourceUrl;
@@ -1523,8 +1528,25 @@ std::string AppConfig::get_version_fallback_url()
     return APP_UPDATE_URL_BASE_FALLBACK + APP_UPDATE_URL + localLanguage + std::string("/version.json");
 }
 
+std::string AppConfig::get_config_api_url()
+{
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
+    std::string overrideUrl = get("orca_config_api_url");
+    if (!overrideUrl.empty())
+        return overrideUrl;
+
+#if BBL_INTERNAL_TESTING
+    return CONFIG_API_URL_DEV;
+#else
+    return CONFIG_API_URL_PROD;
+#endif
+}
+
 std::string AppConfig::version_check_url(bool stable_only/* = false*/) const
 {
+    // SNORCA: no update checks; ini overrides are ignored too.
+    return {};
     auto from_settings = get("version_check_url");
     return from_settings.empty() ? stable_only ? VERSION_CHECK_URL_STABLE : VERSION_CHECK_URL : from_settings;
 }
@@ -1534,6 +1556,7 @@ bool AppConfig::exists()
     return boost::filesystem::exists(config_path());
 }
 
+// SNORCA: device list API kept for the multiACE connect code (removed upstream in v2.4.1).
 void AppConfig::save_device_info(const DeviceInfo& device)
 {
     // 检查是否已存在该设备

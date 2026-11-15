@@ -67,12 +67,12 @@ private:
     static bool get_stream_url(std::string *url = nullptr);
 
 private:
-    // FOS: extended states beyond wxMediaState's valid range [0,3]. clang 17+
-    // rejects the enum cast in a constant expression, so these are plain ints.
-    static const int MEDIASTATE_IDLE = 3;
-    static const int MEDIASTATE_INITIALIZING = 4;
-    static const int MEDIASTATE_LOADING = 5;
-    static const int MEDIASTATE_BUFFERING = 6;
+    // Custom states beyond wxMediaState's enumerators (range is [0, 3] on current wx).
+    // Stored as int so AppleClang 21+ does not reject out-of-range constexpr enum conversions.
+    static constexpr int MEDIASTATE_IDLE = 3;
+    static constexpr int MEDIASTATE_INITIALIZING = 4;
+    static constexpr int MEDIASTATE_LOADING = 5;
+    static constexpr int MEDIASTATE_BUFFERING = 6;
 
     wxMediaCtrl2 * m_media_ctrl;
     int m_last_state = MEDIASTATE_IDLE;

@@ -37,11 +37,9 @@ namespace GUI {
 WebViewPanel::WebViewPanel(wxWindow *parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
  {
-    wxString url = wxString::FromUTF8(LOCALHOST_URL + std::to_string(wxGetApp().get_page_http_port()) + "/web/flutter_web/index.html?path=1");
+    wxString url = wxGetApp().gateway_web_url("home_page");
     // wxString url = wxString::Format("file://%s/web/homepage/index.html?path=homepage.html", from_u8(resources_dir()));
     // wxString url     = wxString("http://127.0.0.1:") + wxString(std::to_string(PAGE_HTTP_PORT)) + wxString("/web/flutter_web/index.html?path=1");
-    url = wxGetApp().get_international_url(url);
-
     // test
     // url = "http://localhost:13619/web/flutter_web/1.html";
 
@@ -87,7 +85,8 @@ WebViewPanel::WebViewPanel(wxWindow *parent)
     m_info = new wxInfoBar(this);
     topsizer->Add(m_info, wxSizerFlags().Expand());
     // Create the webview
-    m_browser = WebView::CreateWebView(this, url);
+    BOOST_LOG_TRIVIAL(warning) << "[FLUTTER_FLOW] [webview] [navigation_requested] view=home url=" << url.ToUTF8().data();
+    m_browser = WebView::CreateWebView(this, url, true); // SNORCA: local-only while "Hide online models" is on
 
     wxGetApp().fltviews().add_webview_panel(this, url);
 
@@ -95,7 +94,6 @@ WebViewPanel::WebViewPanel(wxWindow *parent)
         wxLogError("Could not init m_browser");
         return;
     }
-    m_browser->Hide();
     SetSizer(topsizer);
 
     topsizer->Add(m_browser, wxSizerFlags().Expand().Proportion(1));
@@ -253,8 +251,9 @@ void WebViewPanel::reload() {
 
 void WebViewPanel::load_url(wxString& url)
 {
+    BOOST_LOG_TRIVIAL(warning) << "[FLUTTER_FLOW] [webview] [navigation_requested] view=home url=" << url.ToUTF8().data();
 
-    m_browser->LoadURL(url);
+    WebView::LoadUrl(m_browser, url);
 
     wxGetApp().fltviews().add_webview_panel(this, url);
 
@@ -428,9 +427,6 @@ void WebViewPanel::OnClose(wxCloseEvent& evt)
 
 void WebViewPanel::OnFreshLoginStatus(wxTimerEvent &event)
 {
-    /*auto mainframe = Slic3r::GUI::wxGetApp().mainframe;
-    if (mainframe && mainframe->m_webview == this)
-        Slic3r::GUI::wxGetApp().sm_get_login_info();*/
 }
 
 void WebViewPanel::SetLoginPanelVisibility(bool bshow)
@@ -603,7 +599,6 @@ void WebViewPanel::OnNavigationRequest(wxWebViewEvent& evt)
     */
 void WebViewPanel::OnNavigationComplete(wxWebViewEvent& evt)
 {
-    m_browser->Show();
     Layout();
     BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetTarget().ToUTF8().data();
     if (wxGetApp().get_mode() == comDevelop)
@@ -621,6 +616,7 @@ void WebViewPanel::OnDocumentLoaded(wxWebViewEvent& evt)
     // Only notify if the document is the main frame, not a subframe
     if (evt.GetURL() == m_browser->GetCurrentURL())
     {
+        BOOST_LOG_TRIVIAL(warning) << "[FLUTTER_FLOW] [webview] [navigation_loaded] view=home url=" << evt.GetURL().ToUTF8().data();
         if (wxGetApp().get_mode() == comDevelop)
             wxLogMessage("%s", "Document loaded; url='" + evt.GetURL() + "'");
     }

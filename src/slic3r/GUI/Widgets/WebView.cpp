@@ -2,6 +2,7 @@
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/Utils/MacDarkMode.hpp"
 
+#include <algorithm>
 #include <boost/log/trivial.hpp>
 
 #include <wx/webviewarchivehandler.h>
@@ -23,6 +24,7 @@
 #endif
 
 #ifdef __WIN32__
+#include <objbase.h>
 #include <WebView2.h>
 #include <Shellapi.h>
 #include <slic3r/Utils/Http.hpp>
@@ -44,6 +46,43 @@ webkit_web_view_run_javascript_finish                (WebKitWebView             
 						      GError                    **error);
 WEBKIT_API void
 webkit_javascript_result_unref              (WebKitJavascriptResult *js_result);
+}
+// SNORCA: WebKitGTK content filter API (WebKitGTK >= 2.24), used by "Hide online models".
+struct WebKitUserContentFilterStore;
+struct WebKitUserContentFilter;
+struct WebKitUserContentManager;
+extern "C" {
+WEBKIT_API WebKitUserContentFilterStore *webkit_user_content_filter_store_new(const gchar *storage_path);
+WEBKIT_API void webkit_user_content_filter_store_save(WebKitUserContentFilterStore *store, const gchar *identifier, GBytes *source,
+                                                      GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
+WEBKIT_API WebKitUserContentFilter *webkit_user_content_filter_store_save_finish(WebKitUserContentFilterStore *store, GAsyncResult *result,
+                                                                                 GError **error);
+WEBKIT_API WebKitUserContentManager *webkit_web_view_get_user_content_manager(WebKitWebView *web_view);
+WEBKIT_API void webkit_user_content_manager_add_filter(WebKitUserContentManager *manager, WebKitUserContentFilter *filter);
+WEBKIT_API void webkit_user_content_manager_remove_filter(WebKitUserContentManager *manager, WebKitUserContentFilter *filter);
+}
+// SNORCA: page language. WebKitGTK derives navigator.languages from the process locale (LC_ALL/LC_CTYPE),
+// so LC_ALL=C.UTF-8 gives "C", which the Flutter pages pass to Intl.Locale -> "invalid language tag" and
+// the Home/Device pages do not start. The default context (the one wxWebView uses) is told the same
+// language the pages get in ?locale=, with en-US as fallback.
+struct WebKitWebContext;
+extern "C" {
+WEBKIT_API WebKitWebContext *webkit_web_context_get_default(void);
+WEBKIT_API void webkit_web_context_set_preferred_languages(WebKitWebContext *context, const gchar *const *languages);
+}
+static void apply_page_languages()
+{
+    static std::string applied;
+    std::string        tag = Slic3r::GUI::GUI_App::normalize_language_tag(Slic3r::GUI::wxGetApp().gateway_locale());
+    if (tag == applied)
+        return;
+    WebKitWebContext *context = webkit_web_context_get_default();
+    if (context == nullptr)
+        return;
+    const gchar *languages[3] = {tag.c_str(), tag == "en-US" ? nullptr : "en-US", nullptr};
+    webkit_web_context_set_preferred_languages(context, languages);
+    applied = tag;
+    BOOST_LOG_TRIVIAL(warning) << "SNORCA page language: " << tag;
 }
 #endif
 
@@ -104,6 +143,17 @@ DWORD DownloadAndInstallWV2RT() {
   return returnCode;
 }
 
+static wxString PreserveWebViewEngineUserAgent(const wxString &requestedUserAgent, const wxString &currentUserAgent)
+{
+  const int requestedMarker = requestedUserAgent.Find(" Mozilla/5.0");
+  if (!requestedUserAgent.StartsWith("SM-Slicer/") || requestedMarker == wxNOT_FOUND)
+    return requestedUserAgent;
+
+  const int        currentMarker    = currentUserAgent.Find(" Mozilla/5.0");
+  const wxString   engineUserAgent  = currentMarker == wxNOT_FOUND ? currentUserAgent : currentUserAgent.Mid(currentMarker + 1);
+  return requestedUserAgent.Left(requestedMarker) + " " + engineUserAgent;
+}
+
 class WebViewEdge : public wxWebViewEdge
 {
 public:
@@ -120,10 +170,17 @@ public:
                 ICoreWebView2Settings2 *settings2;
                 hr = settings->QueryInterface(&settings2);
                 if (hr == S_OK) {
-                    settings2->put_UserAgent(userAgent.wc_str());
+                    wchar_t *currentUserAgent = nullptr;
+                    wxString userAgentToSet   = userAgent;
+                    if (settings2->get_UserAgent(&currentUserAgent) == S_OK && currentUserAgent) {
+                        userAgentToSet = PreserveWebViewEngineUserAgent(userAgent, currentUserAgent);
+                        CoTaskMemFree(currentUserAgent);
+                    }
+                    hr = settings2->put_UserAgent(userAgentToSet.wc_str());
                     settings2->Release();
-                    return true;
                 }
+                settings->Release();
+                return hr == S_OK;
             }
             settings->Release();
             return false;
@@ -179,10 +236,115 @@ private:
 
 class WebViewWebKit : public wxWebViewWebKit
 {
+public:
+    explicit WebViewWebKit(const wxString &initialUrl) : m_pendingUrl(initialUrl) {}
+
     ~WebViewWebKit() override
     {
         RemoveScriptMessageHandler("wx");
     }
+
+    void LoadURL(const wxString &url) override
+    {
+        if (!m_scriptMessageHandlerInstalled && url != wxString("about:blank")) {
+            m_pendingUrl = url;
+            return;
+        }
+        RequestLoad(url);
+    }
+
+    void SetScriptMessageHandlerInstalled()
+    {
+        m_scriptMessageHandlerInstalled = true;
+        auto url = std::move(m_pendingUrl);
+        m_pendingUrl.clear();
+        if (!url.empty() && url != wxString("about:blank"))
+            RequestLoad(url);
+    }
+
+    void AttachNavigationGate()
+    {
+        Bind(wxEVT_WEBVIEW_LOADED, &WebViewWebKit::OnNavigationSettled, this);
+        Bind(wxEVT_WEBVIEW_ERROR, &WebViewWebKit::OnNavigationSettled, this);
+    }
+
+private:
+    static bool IsBlankUrl(const wxString &url)
+    {
+        return url.empty() || url == wxString("about:blank");
+    }
+
+    static wxString CanonicalUrl(const wxString &url)
+    {
+        if (IsBlankUrl(url))
+            return url;
+        return wxURI(url).BuildURI();
+    }
+
+    static bool IsFlutterUrl(const wxString &url)
+    {
+        return url.find("flutter_web") != std::string::npos;
+    }
+
+    static wxString UrlPath(const wxString &url)
+    {
+        if (IsBlankUrl(url))
+            return url;
+        return wxURI(url).GetPath();
+    }
+
+    void RequestLoad(const wxString &url)
+    {
+        if (IsBlankUrl(url)) {
+            wxWebViewWebKit::LoadURL(url);
+            return;
+        }
+
+        const wxString target = CanonicalUrl(url);
+        if (!m_inFlightUrl.empty()) {
+            if (UrlPath(target) == UrlPath(m_inFlightUrl))
+                return;
+            // Flutter interrupted by another Flutter → -999 white screen. Queue that case only.
+            // missing_connection.gif sitting in-flight while the view is hidden never settles,
+            // so queuing path=2 behind it leaves Device on the GIF forever.
+            if (IsFlutterUrl(m_inFlightUrl) && IsFlutterUrl(target)) {
+                m_queuedUrl = target;
+                return;
+            }
+        }
+
+        m_queuedUrl.clear();
+        m_inFlightUrl = target;
+        wxWebViewWebKit::LoadURL(target);
+    }
+
+    void FlushQueued()
+    {
+        if (m_queuedUrl.empty())
+            return;
+        auto url = std::move(m_queuedUrl);
+        m_queuedUrl.clear();
+        m_inFlightUrl = url;
+        wxWebViewWebKit::LoadURL(url);
+    }
+
+    void OnNavigationSettled(wxWebViewEvent &evt)
+    {
+        evt.Skip();
+        const wxString eventUrl = CanonicalUrl(evt.GetURL());
+        if (IsBlankUrl(eventUrl))
+            return;
+        // Ignore the document we just replaced (GIF -999 after jumping to path=2).
+        if (!m_inFlightUrl.empty() && UrlPath(eventUrl) != UrlPath(m_inFlightUrl))
+            return;
+        m_inFlightUrl.clear();
+        FlushQueued();
+    }
+
+    bool     m_scriptMessageHandlerInstalled = false;
+    wxString m_pendingUrl;
+    wxString m_inFlightUrl;
+    wxString m_queuedUrl;
 };
 
 #endif
@@ -228,6 +390,132 @@ wxDEFINE_EVENT(EVT_WEBVIEW_RECREATED, wxCommandEvent);
 static std::vector<wxWebView*> g_webviews;
 static std::vector<wxWebView*> g_delay_webviews;
 
+// SNORCA: "Hide online models" (local-only Home/Device pages).
+static std::vector<wxWebView*> g_local_only_views; // eligible views, filtered while g_local_only_on
+static bool                    g_local_only_on = false;
+#if defined(__linux__)
+static WebKitUserContentFilter *g_local_only_filter      = nullptr;
+static bool                     g_local_only_filter_done = false;
+
+// WebKit content-blocker rules (same JSON format as Safari/WKContentRuleList). The engine has no
+// alternation, so every allowed host form is its own "ignore-previous-rules" entry. Allowed:
+// loopback, RFC1918 and link-local IPv4, ::1 / ULA / link-local IPv6, single-label hosts and
+// *.local (mDNS). Everything else over http(s)/ws(s) is blocked, documents and subresources alike.
+static std::string local_only_rules_json()
+{
+    static const char *const schemes[] = {"https?", "wss?"};
+    static const char *const hosts[]   = {
+        R"(127\\.[0-9]+\\.[0-9]+\\.[0-9]+[:/])",
+        R"(localhost[:/])",
+        R"(\\[::1\\][:/])",
+        R"(10\\.[0-9]+\\.[0-9]+\\.[0-9]+[:/])",
+        R"(192\\.168\\.[0-9]+\\.[0-9]+[:/])",
+        R"(172\\.1[6-9]\\.[0-9]+\\.[0-9]+[:/])",
+        R"(172\\.2[0-9]\\.[0-9]+\\.[0-9]+[:/])",
+        R"(172\\.3[01]\\.[0-9]+\\.[0-9]+[:/])",
+        R"(169\\.254\\.[0-9]+\\.[0-9]+[:/])",
+        R"(\\[f[cd][0-9a-f]*:[^/]*\\][:/])",
+        R"(\\[fe80:[^/]*\\][:/])",
+        R"([^./:@]+[:/])",
+        R"([^/:@]*\\.local[:/])",
+    };
+    std::string json = "[";
+    for (const char *sc : schemes)
+        json += std::string(R"({"trigger":{"url-filter":"^)") + sc + R"(://"},"action":{"type":"block"}},)";
+    for (const char *sc : schemes)
+        for (const char *h : hosts)
+            json += std::string(R"({"trigger":{"url-filter":"^)") + sc + "://" + h + R"("},"action":{"type":"ignore-previous-rules"}},)";
+    json.back() = ']';
+    return json;
+}
+
+static void local_only_apply(wxWebView *view, bool on)
+{
+    if (g_local_only_filter == nullptr || view == nullptr)
+        return;
+    auto *wk = (WebKitWebView *) view->GetNativeBackend();
+    if (wk == nullptr)
+        return;
+    WebKitUserContentManager *ucm = webkit_web_view_get_user_content_manager(wk);
+    if (ucm == nullptr)
+        return;
+    if (on)
+        webkit_user_content_manager_add_filter(ucm, g_local_only_filter);
+    else
+        webkit_user_content_manager_remove_filter(ucm, g_local_only_filter);
+}
+#endif
+
+void WebView::InitLocalOnlyFilter(std::string const &storage_dir)
+{
+#if defined(__linux__)
+    static bool started = false;
+    if (started)
+        return;
+    started = true;
+    WebKitUserContentFilterStore *store = webkit_user_content_filter_store_new(storage_dir.c_str());
+    if (store == nullptr) {
+        g_local_only_filter_done = true;
+        BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: cannot create the WebKit filter store";
+        return;
+    }
+    const std::string json  = local_only_rules_json();
+    GBytes           *bytes = g_bytes_new(json.data(), json.size());
+    webkit_user_content_filter_store_save(
+        store, "snorca-local-only-1", bytes, nullptr,
+        [](GObject *src, GAsyncResult *res, gpointer) {
+            GError *error = nullptr;
+            auto   *store = (WebKitUserContentFilterStore *) src;
+            g_local_only_filter = webkit_user_content_filter_store_save_finish(store, res, &error);
+            if (g_local_only_filter == nullptr) {
+                BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: filter compile failed: " << (error ? error->message : "unknown");
+                if (error)
+                    g_error_free(error);
+            } else {
+                BOOST_LOG_TRIVIAL(info) << "SNORCA local-only: filter ready";
+                for (auto *v : g_local_only_views)
+                    local_only_apply(v, g_local_only_on);
+            }
+            g_local_only_filter_done = true;
+            g_object_unref(store);
+        },
+        nullptr);
+    g_bytes_unref(bytes);
+    // Wait (bounded) so the filter exists before any Home/Device page is created. Called before the
+    // main window exists; WebKit finishes the compile on the default GLib context.
+    const gint64 deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+    while (!g_local_only_filter_done && g_get_monotonic_time() < deadline) {
+        if (!g_main_context_iteration(nullptr, FALSE))
+            g_usleep(2000);
+    }
+    if (!g_local_only_filter_done)
+        BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: filter not ready after 5 s, it is applied when ready";
+#else
+    (void) storage_dir;
+#endif
+}
+
+bool WebView::LocalOnlySupported()
+{
+#if defined(__linux__)
+    return true;
+#else
+    return false;
+#endif
+}
+
+void WebView::SetLocalOnly(bool on)
+{
+    g_local_only_on = on;
+    BOOST_LOG_TRIVIAL(info) << "SNORCA local-only (Hide online models): " << (on ? "on" : "off");
+#if defined(__linux__)
+    if (on && g_local_only_filter == nullptr)
+        BOOST_LOG_TRIVIAL(error) << "SNORCA local-only: requested but no filter is available";
+    for (auto *v : g_local_only_views)
+        local_only_apply(v, on);
+#endif
+}
+
 class WebViewRef : public wxObjectRefData
 {
 public:
@@ -237,11 +525,25 @@ public:
         assert(iter != g_webviews.end());
         if (iter != g_webviews.end())
             g_webviews.erase(iter);
+        // Drop pending handler installs so a later g_delay_webviews flush never
+        // calls AddScriptMessageHandler() on a destroyed view.
+        // See bambulab/BambuStudio #11004 and #10968.
+        auto diter = std::find(g_delay_webviews.begin(), g_delay_webviews.end(), m_webView);
+        if (diter != g_delay_webviews.end())
+            g_delay_webviews.erase(diter);
+        auto liter = std::find(g_local_only_views.begin(), g_local_only_views.end(), m_webView);
+        if (liter != g_local_only_views.end())
+            g_local_only_views.erase(liter);
     }
     wxWebView *m_webView;
 };
 
 wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
+{
+    return CreateWebView(parent, url, false);
+}
+
+wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url, bool local_only_eligible)
 {
 #if wxUSE_WEBVIEW_EDGE
     // Check if a fixed version of edge is present in
@@ -259,12 +561,13 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
     url2.Replace("\\", "/");
 #endif
     if (!url2.empty()) { url2 = wxURI(url2).BuildURI(); }
-    BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << url2.ToUTF8();
+    if (!url2.empty())
+        BOOST_LOG_TRIVIAL(info) << "webview create url=" << url2.ToUTF8().data();
 
 #ifdef __WIN32__
     wxWebView* webView = new WebViewEdge;
 #elif defined(__WXOSX__)
-    wxWebView *webView = new WebViewWebKit;
+    wxWebView *webView = new WebViewWebKit(url2);
 #else
     auto webView = wxWebView::New();
 #endif
@@ -292,7 +595,25 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
         webView->RegisterHandler(wxSharedPtr<wxWebViewHandler>(new wxWebViewArchiveHandler("wxfs")));
         webView->RegisterHandler(wxSharedPtr<wxWebViewHandler>(new wxWebViewFSHandler("memory")));
 #endif
+#ifdef __WXMAC__
+        // WKWebView starts loading during Create(), before the delayed handler callback runs.
+        // Keep its initial document blank; the subclass flushes the pending URL after installation.
+        webView->Create(parent, wxID_ANY, wxString("about:blank"), wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+        static_cast<WebViewWebKit *>(webView)->AttachNavigationGate();
+#elif defined(__linux__)
+        apply_page_languages();
+        // SNORCA: an eligible view is created blank, gets the local-only filter, and only then
+        // loads its first URL, so the filter is in place before the page can make any request.
+        webView->Create(parent, wxID_ANY, local_only_eligible ? wxString("about:blank") : url2, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+        if (local_only_eligible) {
+            g_local_only_views.push_back(webView);
+            local_only_apply(webView, g_local_only_on);
+            if (!url2.empty() && url2 != wxString("about:blank"))
+                webView->LoadURL(url2);
+        }
+#else
         webView->Create(parent, wxID_ANY, url2, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+#endif
         webView->SetUserAgent(wxString::Format("SM-Slicer/v%s (%s) Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)", SLIC3R_VERSION,
                                                Slic3r::GUI::wxGetApp().dark_mode() ? "dark" : "light"));
 #endif
@@ -307,9 +628,17 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
                 wxLogError("Could not add script message handler");
             Slic3r::GUI::wxGetApp().set_adding_script_handler(false);
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": finished add script message handler for wx.";
+#ifdef __WXMAC__
+            static_cast<WebViewWebKit *>(webView)->SetScriptMessageHandlerInstalled();
+#endif
         };
 #ifndef __WIN32__
         webView->CallAfter([webView, addScriptMessageHandler] {
+            // CallAfter can run after this webView has been destroyed (macOS 26.5+).
+            // g_webviews holds only live views; skip dangling pointers.
+            // See bambulab/BambuStudio #11004 and #10968.
+            if (std::find(g_webviews.begin(), g_webviews.end(), webView) == g_webviews.end())
+                return;
 #endif
             if (Slic3r::GUI::wxGetApp().is_adding_script_handler()) {
                 g_delay_webviews.push_back(webView);
@@ -317,8 +646,11 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
                 addScriptMessageHandler(webView);
                 while (!g_delay_webviews.empty()) {
                     auto views = std::move(g_delay_webviews);
-                    for (auto wv : views)
+                    for (auto wv : views) {
+                        if (std::find(g_webviews.begin(), g_webviews.end(), wv) == g_webviews.end())
+                            continue;
                         addScriptMessageHandler(wv);
+                    }
                 }
             }
 #ifndef __WIN32__
@@ -355,7 +687,8 @@ void WebView::LoadUrl(wxWebView * webView, wxString const &url)
     url2.Replace("\\", "/");
 #endif
     if (!url2.empty()) { url2 = wxURI(url2).BuildURI(); }
-    BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << url2.ToUTF8();
+    if (!url2.empty())
+        BOOST_LOG_TRIVIAL(info) << "webview load url=" << url2.ToUTF8().data();
     webView->LoadURL(url2);
 }
 

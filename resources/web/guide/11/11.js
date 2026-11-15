@@ -63,7 +63,7 @@ function GotoPolicyPage()
 	SendWXMessage( JSON.stringify(tSend) );
 	
 
-	window.location.href="../3/index.html";
+	window.location.href="../21/index.html"; // SNORCA: the usage-data page (3) is removed; usage data is only switched on in Preferences
 }
 
 

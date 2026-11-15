@@ -366,6 +366,21 @@ int RichMessageDialog::ShowModal()
         show_dsa_button(m_checkBoxText);
         m_checkbox_dsa->SetValue(m_checkBoxValue);
     }
+
+    // Apply custom button labels set via SetYesNoLabels / SetYesNoCancelLabels etc.
+    if (!GetCustomYesLabel().empty())
+        if (auto* btn = get_button(wxID_YES))
+            btn->SetLabel(GetCustomYesLabel());
+    if (!GetCustomNoLabel().empty())
+        if (auto* btn = get_button(wxID_NO))
+            btn->SetLabel(GetCustomNoLabel());
+    if (!GetCustomOKLabel().empty())
+        if (auto* btn = get_button(wxID_OK))
+            btn->SetLabel(GetCustomOKLabel());
+    if (!GetCustomCancelLabel().empty())
+        if (auto* btn = get_button(wxID_CANCEL))
+            btn->SetLabel(GetCustomCancelLabel());
+
     Layout();
 
     return wxDialog::ShowModal();
@@ -543,15 +558,15 @@ wxBoxSizer *Newer3mfVersionDialog::get_msg_sizer()
     wxBoxSizer *     horizontal_sizer = new wxBoxSizer(wxHORIZONTAL);
     wxString    msg_str;
     if (file_version_newer) { 
-        text1 = new wxStaticText(this, wxID_ANY, _L("The 3mf file version is in Beta and it is newer than the current Snapmaker Orca version."));
-        wxStaticText *   text2       = new wxStaticText(this, wxID_ANY, _L("If you would like to try Snapmaker Orca Beta, you may click to"));
+        text1 = new wxStaticText(this, wxID_ANY, _L("The 3mf file version is in Beta and it is newer than the current Snorca MultiAce version."));
+        wxStaticText *   text2       = new wxStaticText(this, wxID_ANY, _L("If you would like to try Snorca MultiAce Beta, you may click to"));
         wxHyperlinkCtrl *github_link = new wxHyperlinkCtrl(this, wxID_ANY, _L("Download Beta Version"), "https://github.com/Snapmaker/OrcaSlicer/releases");
         horizontal_sizer->Add(text2, 0, wxEXPAND, 0);
         horizontal_sizer->Add(github_link, 0, wxEXPAND | wxLEFT, 5);
         
     } else {
-        text1 = new wxStaticText(this, wxID_ANY, _L("The 3mf file version is newer than the current Snapmaker Orca version."));
-        wxStaticText *text2 = new wxStaticText(this, wxID_ANY, _L("Updating your Snapmaker Orca could enable all functionality in the 3MF file."));
+        text1 = new wxStaticText(this, wxID_ANY, _L("The 3mf file version is newer than the current Snorca MultiAce version."));
+        wxStaticText *text2 = new wxStaticText(this, wxID_ANY, _L("Updating your Snorca MultiAce could enable all functionality in the 3MF file."));
         horizontal_sizer->Add(text2, 0, wxEXPAND, 0);
     }
     Semver        app_version = *(Semver::parse(SLIC3R_VERSION));
