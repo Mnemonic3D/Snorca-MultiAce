@@ -58,11 +58,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Must run before any cache action: actions/cache picks zstd or gzip by probing for
-      # zstd, and Homebrew zstd also collides with the deps build on the include path.
-      - name: Remove Homebrew zstd (before any cache action)
-        run: brew uninstall --ignore-dependencies zstd || true
-
       - name: Compute dependency cache key
         id: depkey
         run: echo "key=snorcadeps-mac-${{ matrix.arch }}-${{ env.OSX_DEPLOYMENT_TARGET }}-${{ env.BUILD_CONFIG }}-${{ hashFiles('deps/**/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/*.patch', '!deps/build/**') }}" >> "$GITHUB_OUTPUT"
@@ -114,10 +109,17 @@ jobs:
         run: |
           cmake --version
           chmod +x ./build_release_macos.sh
+          # Homebrew zstd collides with the deps build on the include path (as upstream does:
+          # remove it for the deps build only, put it back afterwards; Homebrew's curl needs it).
+          brew uninstall --ignore-dependencies zstd || true
           ./build_release_macos.sh -d -x -a "${{ matrix.arch }}" -t "$OSX_DEPLOYMENT_TARGET" -c "$BUILD_CONFIG"
           test -d "deps/build/${{ matrix.arch }}/OrcaSlicer_dep/usr/local/lib"
           ls "deps/build/${{ matrix.arch }}/OrcaSlicer_dep/usr/local/lib" | grep -E '^lib(ssl|crypto)\.a$'
           du -sh "deps/build/${{ matrix.arch }}/OrcaSlicer_dep"
+
+      - name: Put Homebrew zstd back
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        run: brew install zstd || true
 
       - name: Save dependency cache
         if: steps.cache.outputs.cache-hit != 'true'
@@ -138,9 +140,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Remove Homebrew zstd (before any cache action)
-        run: brew uninstall --ignore-dependencies zstd || true
 
       - name: Compute dependency cache key
         id: depkey
