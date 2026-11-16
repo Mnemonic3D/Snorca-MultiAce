@@ -91,6 +91,16 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 | **Mac** | Not planned for now. |
 | **Touch-screen label installer** (optional) | Windows: the `...ACE-screen-label-installer-EXPERIMENTAL-windows-x64.exe` file. Linux: the `...ACE-screen-label-installer-EXPERIMENTAL-linux-x64` file; make it executable (`chmod +x`) and run it. One file, nothing to install on your PC. Windows shows an "unknown publisher" warning. |
 
+## First setup on a new computer
+
+1. Open **Help > Setup Wizard** and choose the **Snapmaker U1 four-toolhead profile**. Run the wizard yourself if it does not appear on first launch.
+2. In **Home** or **Device**, add your printer by its LAN IP address, complete the printer's pairing prompt, and connect to it.
+3. In the printer preset, select **multiACE** as the material system, enter that same printer IP as the multiACE address, and select the **head** topology for the usual U1 setup. Save the preset.
+4. Return to **Prepare**, select that preset, and press the filament **sync** button. Check that its colours, materials and nozzle routes match the printer.
+5. Turn **Auto** on if you want the list to follow the printer automatically. Auto starts off on a fresh profile. When switching printers, connect the matching printer in Home or Device as well.
+
+A missing connection or an IP mismatch keeps your previous palette and explains what to correct. Existing legacy LAN pairings remain supported. Do not copy another computer's pairing credentials to make a fresh installation work.
+
 ## Where it stands
 
 - **2.4.1-snorca.1** (Snapmaker Orca 2.4.1 base) was tried by the author on Linux. Not tried yet: Windows and Mac, mixed filaments with multiACE sync, Snapmaker sign-in, usage data switched on. Details on the release page.

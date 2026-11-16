@@ -376,6 +376,7 @@ private:
     {
         std::uint64_t generation{0};
         std::string   serial_number;
+        std::string   lan_address;
         bool          connected{false};
         bool          objects_query_active{false};
         bool          objects_refresh_pending{false};
@@ -611,6 +612,9 @@ private:
     bool            is_gateway_url(const wxString& url) const;
     std::shared_ptr<Gateway::GatewayService> gateway_service() const { return m_gateway_service; }
     bool            gateway_device_connected() const;
+    std::string     gateway_lan_address() const { return gateway_device_connected() ? m_gateway_device.lan_address : std::string{}; }
+    std::string     gateway_serial_number() const { return gateway_device_connected() ? m_gateway_device.serial_number : std::string{}; }
+    std::uint64_t   gateway_device_generation() const { return m_gateway_device.generation; }
 
     void            switch_staff_pick(bool on);
     bool            check_privacy_update();

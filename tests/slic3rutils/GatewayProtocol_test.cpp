@@ -173,3 +173,33 @@ TEST_CASE("ReconnectPolicy backs off and resets after a stable connection", "[ga
     REQUIRE(policy.next_delay() == std::chrono::milliseconds{250});
     REQUIRE(policy.attempts() == 1);
 }
+
+TEST_CASE("Fresh profile gateway pairing resolves only a unique connected LAN identity", "[gateway][protocol][snorca]")
+{
+    json devices{{"devices", {{{"sn", "U1-NEW"}, {"ip", "192.168.1.30"}, {"connected", true}, {"type", "LAN"}}}}};
+    REQUIRE(connected_lan_address(devices, "U1-NEW") == "192.168.1.30");
+    REQUIRE(connected_lan_address(devices, "U1-OTHER").empty());
+    REQUIRE(connected_lan_address(devices, "").empty());
+    SECTION("disconnect retains the old palette") {
+        devices["devices"][0]["connected"] = false;
+        REQUIRE(connected_lan_address(devices, "U1-NEW").empty());
+    }
+    SECTION("cloud connection cannot validate a LAN endpoint") {
+        devices["devices"][0]["type"] = "WAN";
+        REQUIRE(connected_lan_address(devices, "U1-NEW").empty());
+    }
+    SECTION("duplicate serials are ambiguous") {
+        devices["devices"].push_back(devices["devices"][0]);
+        REQUIRE(connected_lan_address(devices, "U1-NEW").empty());
+    }
+    SECTION("invalid and public addresses are rejected") {
+        for (const auto* ip : {"example.com", "127.0.0.1", "8.8.8.8", "192.168.001.30", "192.168.1.30:80"}) {
+            devices["devices"][0]["ip"] = ip;
+            REQUIRE(connected_lan_address(devices, "U1-NEW").empty());
+        }
+    }
+    SECTION("malformed input does not throw") {
+        for (const auto& value : {json(), json::array(), json{{"devices", "bad"}}, json{{"devices", {42, nullptr}}}})
+            REQUIRE(connected_lan_address(value, "U1-NEW").empty());
+    }
+}

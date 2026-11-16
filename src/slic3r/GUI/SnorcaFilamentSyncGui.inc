@@ -108,7 +108,7 @@ void Sidebar::reset_snorca_filament_sync_baseline(bool explicit_new_project)
 }
 
 // A saved, paired printer explicitly selected in Prepare is the sync target.
-struct SnorcaSelectedPrinter {std::string address,serial,preset;DeviceInfo device;};
+struct SnorcaSelectedPrinter {std::string address,serial,preset;DeviceInfo device;bool gateway{false};std::uint64_t gateway_generation{0};};
 static SnorcaSelectedPrinter snorca_selected_printer()
 {
     SnorcaSelectedPrinter result;const auto& preset=wxGetApp().preset_bundle->printers.get_edited_preset();result.preset=preset.name;
@@ -116,11 +116,19 @@ static SnorcaSelectedPrinter snorca_selected_printer()
     const auto* option=preset.config.option<ConfigOptionString>("mms_host");
     if(!option||option->value.empty())throw std::runtime_error("Selected printer has no saved IP. Set its multiACE address once.");
     result.address=SnorcaFilamentSync::printer_address(option->value);
+    if (wxGetApp().gateway_device_connected()) {
+        if (wxGetApp().gateway_lan_address() != result.address)
+            throw std::runtime_error("Connect this printer by LAN in Home or Device before syncing; previous palette retained.");
+        result.gateway = true;
+        result.gateway_generation = wxGetApp().gateway_device_generation();
+        result.serial = wxGetApp().gateway_serial_number();
+        return result;
+    }
     unsigned matches=0;for(const auto& device:devices){
         std::string address;try{address=SnorcaFilamentSync::printer_address(device.ip);}catch(const std::exception&){continue;}
         if(address==result.address){result.serial=device.sn;result.device=device;result.device.ip=address;++matches;}
     }
-    if(matches!=1||result.serial.empty())throw std::runtime_error("Saved IP has no unique paired printer registration; previous palette retained.");
+    if(matches!=1||result.serial.empty())throw std::runtime_error("Connect this printer by LAN in Home or Device, then press sync. Previous palette retained.");
     return result;
 }
 
@@ -290,7 +298,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
     catch(const std::exception& e){p->snorca_sync_status->SetLabel(wxString::FromUTF8(std::string("Sync retained palette: ")+e.what()));return;}
     // SNORCA (2026-11-15): Auto never takes the printer connection away from another printer (the Device tab's).
     // It waits; the sync button (an explicit request) still connects to the Prepare printer as before.
-    if(!manual&&!SnorcaPrinterConnect::connected(selected_printer.device)&&SnorcaPrinterConnect::other_printer_connected(selected_printer.device)){ // SNORCA
+    if(!selected_printer.gateway&&!manual&&!SnorcaPrinterConnect::connected(selected_printer.device)&&SnorcaPrinterConnect::other_printer_connected(selected_printer.device)){ // SNORCA
         const wxString l=wxString::FromUTF8("Auto waits: the Device tab is connected to another printer"); // SNORCA
         const wxString t=wxString::FromUTF8("Auto sync does not take the printer connection away from the Device tab. Palette retained.\nSelect "+preset_name+" in the Device tab, or press the sync button to connect to it."); // SNORCA
         if(p->snorca_sync_status->GetLabel()!=l){p->snorca_sync_status->SetLabel(l);Layout();} // SNORCA
@@ -301,21 +309,37 @@ void Sidebar::sync_snorca_filaments(bool manual)
     p->snorca_sync_busy=true; // SNORCA: no "Reading…" text every 10 s; the line changes only when the result changes
     Sidebar* self=this;auto alive=p->snorca_sync_alive;auto generation=p->snorca_sync_generation;const uint64_t ticket=++(*generation);
     const auto device=selected_printer.device;const auto printer_config=wxGetApp().preset_bundle->printers.get_edited_preset().config;
-    const bool already_connected=SnorcaPrinterConnect::connected(device);
+    const bool use_gateway=selected_printer.gateway;
+    const auto gateway_generation=selected_printer.gateway_generation;
+    const auto gateway=wxGetApp().gateway_service();
+    const bool already_connected=use_gateway||SnorcaPrinterConnect::connected(device);
     std::shared_ptr<PrintHost> original_host;wxGetApp().get_connect_host(original_host);
-    p->snorca_sync_thread=std::thread([self,alive,generation,ticket,device,printer_config,already_connected,original_host,address,serial,preset_name,before,compatible,overrides,manual](){
+    p->snorca_sync_thread=std::thread([self,alive,generation,ticket,device,printer_config,already_connected,original_host,address,serial,preset_name,before,compatible,overrides,manual,use_gateway,gateway_generation,gateway](){
         auto connection=std::make_shared<SnorcaPrinterConnect::Ready>();
         if(!already_connected)*connection=SnorcaPrinterConnect::prepare(device,printer_config,alive,generation,ticket);
         J inventory;std::string error;
+        auto verify_gateway=[&] {
+            if (!use_gateway) return;
+            if (!gateway || !gateway->is_connected()) throw std::runtime_error("Printer gateway disconnected.");
+            auto current=gateway->request_sync("query.device.current",J::object(),std::chrono::seconds(3));
+            auto parsed=Gateway::parse_current_device(current.value);
+            if(current.error||!parsed||!parsed->connected||parsed->serial_number!=serial)
+                throw std::runtime_error("Gateway printer changed or disconnected.");
+            auto devices=gateway->request_sync("query.device.list",J::object(),std::chrono::seconds(3));
+            if(devices.error||Gateway::connected_lan_address(devices.value,serial)!=address)
+                throw std::runtime_error("Gateway LAN identity no longer matches the selected printer.");
+        };
         try{
+            verify_gateway();
             std::string response;bool complete=false;
             Http::get("http://"+address+"/multiace/api/state").direct_no_redirects().timeout_connect(3).timeout_max(6).size_limit(1024*1024)
                 .on_complete([&](std::string body,unsigned code){if(code==200){response=std::move(body);complete=true;}else error="Printer returned a non-200 response.";})
                 .on_error([&](std::string,std::string message,unsigned){error=message;}).perform_sync();
             if(!complete)throw std::runtime_error(error.empty()?"Printer did not return inventory.":error);
             inventory=SnorcaFilamentSync::normalize(J::parse(response),serial,address,overrides);
+            verify_gateway();
         }catch(const std::exception& e){error=e.what();}
-        wxGetApp().CallAfter([self,alive,generation,ticket,device,already_connected,original_host,connection,address,serial,preset_name,before,compatible,manual,inventory,error](){
+        wxGetApp().CallAfter([self,alive,generation,ticket,device,already_connected,original_host,connection,address,serial,preset_name,before,compatible,manual,inventory,error,use_gateway,gateway_generation](){
             if(!alive->load())return;self->p->snorca_sync_busy=false;
             std::string connection_note;
             // SNORCA: short line, full text in the tooltip, rewritten only when it changes, one log line per new result.
@@ -324,10 +348,11 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 if(self->p->snorca_sync_status->GetLabel()!=l){self->p->snorca_sync_status->SetLabel(l);self->Layout();} // SNORCA
                 if(self->p->snorca_sync_status->GetToolTipText()!=t)self->p->snorca_sync_status->SetToolTip(t); // SNORCA
                 snorca_sync_log(manual,preset_name,address,plain,details+(connection_note.empty()?std::string():"; "+connection_note));}; // SNORCA
-            try{const auto current=snorca_selected_printer();if(current.address!=address||current.serial!=serial||current.preset!=preset_name||current.device.clientId!=device.clientId){status("Printer changed; old color response discarded.");return;}}
+            try{const auto current=snorca_selected_printer();if(current.address!=address||current.serial!=serial||current.preset!=preset_name||current.device.clientId!=device.clientId||current.gateway!=use_gateway||(use_gateway&&current.gateway_generation!=gateway_generation)){status("Printer changed; old color response discarded.");return;}}
             catch(const std::exception&){status("Selected printer registration changed; old color response discarded.");return;}
             if(!manual&&!self->p->snorca_sync_auto->GetValue()){status("Auto sync paused; palette retained.");return;}
             if(generation->load()!=ticket){status("Connection/sync request superseded; palette retained.");return;}
+            if (!use_gateway) {
             std::shared_ptr<PrintHost> current_host;wxGetApp().get_connect_host(current_host);
             if(current_host!=original_host&&!SnorcaPrinterConnect::connected(device)){status("Device connection changed during sync; old request discarded.");return;}
             // SNORCA (2026-11-15): another printer connected while Auto was preparing (Device tab switch): drop ours, keep theirs.
@@ -340,6 +365,8 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 connection_note=" Printer connection unavailable: "+(connection->error.empty()?std::string("saved pairing did not connect."):connection->error);
                 status("Previous palette retained; saved printer identity was not verified.");return;
             }
+
+            } else connection_note=" Connected by LAN through the Device gateway.";
 
             if(!error.empty()){status("Sync unavailable: "+error+" Previous palette retained.");return;}
             try{

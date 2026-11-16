@@ -1,4 +1,5 @@
 #include "GatewayProtocol.hpp"
+#include "SnorcaFilamentSync.hpp"
 
 #include <algorithm>
 
@@ -117,6 +118,29 @@ std::string parse_device_sn(const nlohmann::json& params)
             return value->get<std::string>();
     }
     return {};
+}
+
+std::string connected_lan_address(const nlohmann::json& result, const std::string& serial_number)
+{
+    if (serial_number.empty() || !result.is_object() || !result.contains("devices") || !result["devices"].is_array())
+        return {};
+    std::string address;
+    unsigned matches = 0;
+    for (const auto& device : result["devices"]) {
+        if (!device.is_object() || !device.contains("sn") || device["sn"] != serial_number)
+            continue;
+        ++matches;
+        if (!device.contains("connected") || device["connected"] != true ||
+            !device.contains("ip") || !device["ip"].is_string())
+            continue;
+        // A cloud connection is not proof of the selected LAN endpoint.
+        if (device.contains("type") && device["type"] != "LAN" && device["type"] != "lan")
+            continue;
+        const auto ip = device["ip"].get<std::string>();
+        if (SnorcaFilamentSync::valid_lan_ipv4(ip))
+            address = ip;
+    }
+    return matches == 1 ? address : std::string{};
 }
 
 std::optional<CurrentDevice> parse_current_device(const nlohmann::json& result)

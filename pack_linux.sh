@@ -456,7 +456,7 @@ pack_appimage() {
 
     cat > "$PACKAGE_DIR/${APP_CMD}" <<EOF
 #!/bin/bash
-DIR=\$(readlink -f "\$0" | xargs dirname)
+DIR=\$(dirname -- "\$(readlink -f -- "\$0")")
 export LD_LIBRARY_PATH="\$DIR/bin:\$LD_LIBRARY_PATH"
 export LC_ALL=C
 

@@ -203,6 +203,7 @@
 #include "slic3r/Utils/SnorcaFilamentSync.hpp"
 #include "slic3r/Utils/SnorcaFilamentPlan.hpp"
 #include "SnorcaPrinterConnect.hpp"
+#include "slic3r/Utils/GatewayService.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include <thread>
 #include <wx/timer.h>
@@ -2180,8 +2181,9 @@ Sidebar::Sidebar(Plater *parent)
         sync_button->SetStyle(ButtonStyle::Regular,ButtonType::Compact);sync_button->SetCornerRadius(12);
         sync_button->SetName("snorca_sync_now");sync_button->SetToolTip("Sync this printer's colors, materials and nozzle routes");
         p->snorca_sync_auto=new SwitchButton(p->m_panel_printer_title,wxID_ANY);p->snorca_sync_auto->SetName("snorca_sync_auto");
-        p->snorca_sync_auto->SetToolTip("Automatically connect and sync the selected saved printer");
-        p->snorca_sync_auto->SetValue(wxGetApp().app_config->get("snorca_filament_auto_sync")=="true");
+        p->snorca_sync_auto->SetToolTip("Sync the selected printer automatically. On a fresh install, connect it by LAN in Home or Device first.");
+        const auto auto_sync = wxGetApp().app_config->get("snorca_filament_auto_sync");
+        p->snorca_sync_auto->SetValue((auto_sync.empty() ? wxGetApp().app_config->get("brit_filament_auto_sync") : auto_sync)=="true");
         auto* auto_label=new wxStaticText(p->m_panel_printer_title,wxID_ANY,"Auto");
         p->snorca_sync_undo=new Button(p->m_panel_printer_title,wxEmptyString,"undo",0,14);
         p->snorca_sync_undo->SetStyle(ButtonStyle::Regular,ButtonType::Compact);p->snorca_sync_undo->SetCornerRadius(12);
@@ -2204,7 +2206,7 @@ Sidebar::Sidebar(Plater *parent)
 
         // add printer title
         scrolled_sizer->Add(p->m_panel_printer_title, 0, wxEXPAND | wxALL, 0);
-        p->snorca_sync_status=new wxStaticText(p->scrolled,wxID_ANY,"Select a saved printer to connect and sync.",wxDefaultPosition,wxDefaultSize,wxST_ELLIPSIZE_END);
+        p->snorca_sync_status=new wxStaticText(p->scrolled,wxID_ANY,"Connect your printer by LAN, set its multiACE address, then press sync.",wxDefaultPosition,wxDefaultSize,wxST_ELLIPSIZE_END);
         p->snorca_sync_status->SetName("snorca_sync_status");p->snorca_sync_status->SetMinSize({1,FromDIP(18)});
         scrolled_sizer->Add(p->snorca_sync_status,0,wxEXPAND|wxLEFT|wxRIGHT,FromDIP(10));
         p->m_panel_printer_title->Bind(wxEVT_LEFT_UP, [this] (auto & e)
@@ -3339,7 +3341,7 @@ Sidebar::Sidebar(Plater *parent)
     Bind(wxEVT_TIMER,[this,snorca_seen_printer](wxTimerEvent&){ // SNORCA
         if(SnorcaPrinterConnect::refresh_device_flags()){
             update_all_preset_comboboxes(false);
-            bool connected=false;for(const auto& device:wxGetApp().app_config->get_devices())connected=connected||device.connected;
+            bool connected=wxGetApp().gateway_device_connected();for(const auto& device:wxGetApp().app_config->get_devices())connected=connected||device.connected;
             if(!connected){const wxString text="Printer disconnected. Previous filament palette retained.";p->snorca_sync_status->SetLabel(text);p->snorca_sync_status->SetToolTip(text);}
         }
         if(p->snorca_sync_auto->GetValue())sync_snorca_filaments(false);

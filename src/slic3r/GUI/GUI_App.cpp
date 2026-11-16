@@ -5952,6 +5952,17 @@ void GUI_App::query_gateway_current_device()
                                    }
                                    m_gateway_device.serial_number = current_device->serial_number;
                                    m_gateway_device.connected     = true;
+                                   m_gateway_device.lan_address.clear();
+                                   const auto address_generation = m_gateway_device.generation;
+                                   const auto address_serial = current_device->serial_number;
+                                   m_gateway_service->request("query.device.list", nlohmann::json::object(),
+                                       [this, address_generation, address_serial](Gateway::GatewayError list_error, const nlohmann::json& devices) {
+                                           if (address_generation != m_gateway_device.generation ||
+                                               address_serial != m_gateway_device.serial_number || !m_gateway_device.connected)
+                                               return;
+                                           m_gateway_device.lan_address = list_error ? std::string{} :
+                                               Gateway::connected_lan_address(devices, address_serial);
+                                       });
                                    BOOST_LOG_TRIVIAL(info)
                                        << "[gateway][device-status] current device applied, sn=" << m_gateway_device.serial_number;
 
@@ -6082,6 +6093,8 @@ void GUI_App::register_gateway_notifications()
     });
 
     m_gateway_service->set_notification_handler("notify.device.connected",
+                                                [this](const nlohmann::json&) { query_gateway_current_device(); });
+    m_gateway_service->set_notification_handler("notify.device.list_changed",
                                                 [this](const nlohmann::json&) { query_gateway_current_device(); });
     m_gateway_service->set_notification_handler("notify.device.current_changed",
                                                 [this](const nlohmann::json&) { query_gateway_current_device(); });

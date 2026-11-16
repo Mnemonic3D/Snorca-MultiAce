@@ -99,9 +99,10 @@ if (-not $SkipZip) {
         "*.vcxproj","*.vcxproj.filters","*.vcxproj.user","*.sln",
         "*.cmake","*.py","*.md"
     )
+    $srcFull = (Resolve-Path $SourceDir).Path
     $excludeDirs = @(
         "CMakeFiles","RelWithDebInfo","Debug","MinSizeRel",".vs",
-        "vcpkg_installed","include","lib"
+        "vcpkg_installed",(Join-Path $srcFull "include"),(Join-Path $srcFull "lib")
     )
 
     # robocopy: 8 = first bit that means "real failure"; 0-7 are success//copied/extra
@@ -111,6 +112,16 @@ if (-not $SkipZip) {
     if ($LASTEXITCODE -ge 8) {
         Remove-Item -Recurse -Force $stageRoot -ErrorAction SilentlyContinue
         Fail "robocopy failed with exit code $LASTEXITCODE"
+    }
+
+    # Verify runtime web dependencies survive the portable staging excludes.
+    $webIncludes = Join-Path $srcFull "resources\web\include"
+    if (-not (Test-Path $webIncludes)) { Fail "Source tree is missing resources/web/include." }
+    foreach ($asset in Get-ChildItem $webIncludes -Recurse -File -Include *.js,*.css,*.json,*.woff,*.woff2,*.ttf,*.svg,*.png) {
+        $relative = $asset.FullName.Substring($srcFull.Length).TrimStart('\','/')
+        if (-not (Test-Path (Join-Path $stage $relative))) {
+            Fail "Portable staging dropped web dependency: $relative"
+        }
     }
 
     if (-not (Test-Path (Join-Path $stage "FOrcaSlicer.exe"))) {
