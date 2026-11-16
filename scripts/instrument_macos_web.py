@@ -38,7 +38,9 @@ script = """<script>
 </script>"""
 page.write_text(page.read_text().replace("<head>", "<head>" + script, 1))
 if os.environ.get("FORCE_CPU_RENDERER") == "true":
-    bootstrap = next(page.parent.glob("flutter_bootstrap.*.js"))
+    bootstraps = list(page.parent.glob("flutter_bootstrap*.js"))
+    assert len(bootstraps) == 1, bootstraps
+    bootstrap = bootstraps[0]
     content = bootstrap.read_text()
     marker = "canvasKitBaseUrl: 'canvaskit/'"
     assert content.count(marker) == 1
@@ -59,4 +61,6 @@ class Recorder(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-http.server.HTTPServer(("127.0.0.1", 39751), Recorder).serve_forever()
+server = http.server.HTTPServer(("127.0.0.1", 39751), Recorder)
+(evidence / "recorder-ready").touch()
+server.serve_forever()

@@ -16,7 +16,12 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 if test "${WEB_DIAGNOSTICS:-false}" = true; then
   python3 scripts/instrument_macos_web.py "$APP" "$EVIDENCE" &
   RECORDER_PID=$!
-  sleep 2
+  for attempt in {1..20}; do
+    kill -0 "$RECORDER_PID" || { echo 'Web instrumentation failed'; exit 1; }
+    test -f "$EVIDENCE/recorder-ready" && break
+    sleep 0.5
+  done
+  test -f "$EVIDENCE/recorder-ready"
   codesign --force --deep --sign - "$APP"
 fi
 PROFILE="$RUNNER_TEMP/snorca-check-empty-profile"
