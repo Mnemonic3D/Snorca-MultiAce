@@ -2,6 +2,7 @@
 import http.server
 import json
 import pathlib
+import os
 import sys
 import urllib.parse
 
@@ -21,11 +22,29 @@ script = """<script>
   setTimeout(() => {
     const gl = document.createElement('canvas').getContext('webgl2');
     report('webgl', gl ? {version:gl.getParameter(gl.VERSION),renderer:gl.getParameter(gl.RENDERER)} : null);
+    const elements = [];
+    const walk = root => {for (const el of root.querySelectorAll('*')) {
+      if (el.tagName === 'CANVAS' || el.tagName.toLowerCase().startsWith('flt-')) {
+        const r = el.getBoundingClientRect();
+        elements.push({tag:el.tagName,width:r.width,height:r.height,style:el.getAttribute('style')});
+      }
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }};
+    walk(document);
+    report('surfaces', elements);
     report('document', {url:location.href, html:document.body.innerHTML.slice(0,20000)});
   }, 45000);
 })();
 </script>"""
 page.write_text(page.read_text().replace("<head>", "<head>" + script, 1))
+if os.environ.get("FORCE_CPU_RENDERER") == "true":
+    bootstrap = next(page.parent.glob("flutter_bootstrap.*.js"))
+    content = bootstrap.read_text()
+    marker = "canvasKitBaseUrl: 'canvaskit/'"
+    assert content.count(marker) == 1
+    bootstrap.write_text(content.replace(marker, marker + ", canvasKitForceCpuOnly: true"))
+    (evidence / "cpu-renderer-test.txt").write_text("Diagnostic copy only: CanvasKit forced to software rendering.\n")
+
 (evidence / "instrumentation.txt").write_text("Diagnostic copy only: HTML error hooks inserted and app ad-hoc signed again. Original DMG unchanged.\n")
 
 class Recorder(http.server.BaseHTTPRequestHandler):

@@ -30,11 +30,12 @@ sleep 30
 screencapture -x "$EVIDENCE/home-30s.png"
 sleep 60
 screencapture -x "$EVIDENCE/home-90s.png"
-if test "${WEB_DIAGNOSTICS:-false}" = true; then
-  swift scripts/macos_test_click.swift 110 48
-  sleep 10
-  screencapture -x "$EVIDENCE/prepare.png"
-fi
+swift scripts/macos_test_click.swift 110 48
+sleep 10
+screencapture -x "$EVIDENCE/prepare.png"
+swift scripts/macos_test_click.swift 20 48
+sleep 5
+screencapture -x "$EVIDENCE/home-return.png"
 ps -axo pid,ppid,command | grep -E 'FOrcaSlicer|snapmaker_control' >"$EVIDENCE/processes.txt" || true
 if test -d "$PROFILE/log"; then cp -R "$PROFILE/log" "$EVIDENCE/app-log"; fi
 ls -l "$APP/Contents/Resources"/snapmaker_control_macos_* >"$EVIDENCE/helper-modes.txt"
