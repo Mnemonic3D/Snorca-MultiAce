@@ -1,0 +1,50 @@
+name: Check existing Windows packages on a fresh runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build workflow run whose installer and ZIP should be checked
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          pattern: Snorca_MultiAce_Windows_*
+          merge-multiple: true
+          path: dist
+      - name: Verify checksums and prepare comparison tree
+        shell: pwsh
+        run: |
+          foreach ($checksum in Get-ChildItem dist -Filter *.sha256) {
+            $line = (Get-Content $checksum.FullName -Raw).Trim()
+            $parts = $line -split '\s+', 2
+            $file = Join-Path $checksum.DirectoryName $parts[1]
+            if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLower() -ne $parts[0].ToLower()) { throw "Checksum mismatch: $file" }
+          }
+          $zip = Get-ChildItem dist -Filter *.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath build
+          Move-Item build/FOrcaSlicer build/Snapmaker_Orca
+          if (-not (Test-Path build/Snapmaker_Orca/resources/web/include/globalapi.js)) { throw 'Missing globalapi.js' }
+          if (-not (Test-Path build/Snapmaker_Orca/resources/snapmaker_control_windows_x64.exe)) { throw 'Missing LAN helper' }
+      - name: Check portable and installed packages
+        shell: pwsh
+        run: ./scripts/test_windows_packages.ps1
+      - name: Save evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-package-check-${{ inputs.run_id }}
+          path: package-test-results/
+          if-no-files-found: warn
