@@ -88,7 +88,7 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 |---|---|
 | **Linux** (64-bit) | The `Snorca-MultiAce-2.4.1-snorca.2-linux-x86_64.tar.xz` file from the newest release. Unpack it and run `AppRun`. It uses the same settings folder as snorca.3; back it up first. |
 | **Windows** (64-bit) | The snorca.3 installer `.exe` or portable `.zip` (Snapmaker Orca 2.3.2 base, without the printer-switch fix). The [2.4.1 Windows installer and portable build](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/runs/43912419720) is being built and checked with fresh profiles; it is not ready to download yet. Windows shows an "unknown publisher" warning. |
-| **Mac** | [Apple Silicon and Intel builds](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/runs/43912420027) are being built and checked. Downloads are not ready yet; these builds will be ad-hoc signed, without Apple notarization. |
+| **Mac** | [Apple Silicon and Intel builds](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/runs/43918188278) are being built and checked. Downloads are not ready yet; these builds will be ad-hoc signed, without Apple notarization. |
 | **Touch-screen label installer** (optional) | Windows: the `...ACE-screen-label-installer-EXPERIMENTAL-windows-x64.exe` file. Linux: the `...ACE-screen-label-installer-EXPERIMENTAL-linux-x64` file; make it executable (`chmod +x`) and run it. One file, nothing to install on your PC. Windows shows an "unknown publisher" warning. |
 
 ## First setup on a new computer
