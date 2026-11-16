@@ -117,8 +117,15 @@ static SnorcaSelectedPrinter snorca_selected_printer()
     if(!option||option->value.empty())throw std::runtime_error("Selected printer has no saved IP. Set its multiACE address once.");
     result.address=SnorcaFilamentSync::printer_address(option->value);
     if (wxGetApp().gateway_device_connected()) {
-        if (wxGetApp().gateway_lan_address() != result.address)
-            throw std::runtime_error("Connect this printer by LAN in Home or Device before syncing; previous palette retained.");
+        const auto connected_address = wxGetApp().gateway_lan_address();
+        if (connected_address.empty())
+            throw std::runtime_error(wxGetApp().gateway_address_pending()
+                ? "Waiting for the printer's LAN address. Auto sync will retry; existing filaments kept."
+                : "Printer connected, but its LAN address is unavailable. Check LAN mode in Device; existing filaments kept.");
+        if (connected_address != result.address)
+            throw std::runtime_error("Printer address mismatch: Prepare uses " + result.address +
+                ", Device uses " + connected_address +
+                ". Select the same printer or correct its multiACE address; existing filaments kept.");
         result.gateway = true;
         result.gateway_generation = wxGetApp().gateway_device_generation();
         result.serial = wxGetApp().gateway_serial_number();
@@ -128,7 +135,7 @@ static SnorcaSelectedPrinter snorca_selected_printer()
         std::string address;try{address=SnorcaFilamentSync::printer_address(device.ip);}catch(const std::exception&){continue;}
         if(address==result.address){result.serial=device.sn;result.device=device;result.device.ip=address;++matches;}
     }
-    if(matches!=1||result.serial.empty())throw std::runtime_error("Connect this printer by LAN in Home or Device, then press sync. Previous palette retained.");
+    if(matches!=1||result.serial.empty())throw std::runtime_error("Waiting for a matching LAN printer. Select this printer in Device; Auto sync retries. Existing filaments kept.");
     return result;
 }
 
@@ -278,9 +285,17 @@ void Sidebar::sync_snorca_filaments(bool manual)
     using J=nlohmann::json;
     if(SnorcaPrinterConnect::refresh_device_flags())update_all_preset_comboboxes(false);
     if(p->snorca_sync_busy)return;
+    // Recover missing connection metadata without asking the user to reconnect.
+    wxGetApp().refresh_gateway_connection();
     SnorcaSelectedPrinter selected_printer;
     try{selected_printer=snorca_selected_printer();}
-    catch(const std::exception& e){p->snorca_sync_status->SetLabel(wxString::FromUTF8(e.what()));p->snorca_sync_status->SetToolTip(wxString::FromUTF8(e.what()));return;}
+    catch (const std::exception& e) {
+        const std::string detail = e.what();
+        // Keep the one-line banner readable; hover shows the action and palette status.
+        p->snorca_sync_status->SetLabel(wxString::FromUTF8(detail.substr(0, detail.find(". "))));
+        p->snorca_sync_status->SetToolTip(wxString::FromUTF8(detail));
+        return;
+    }
     const auto address=selected_printer.address,serial=selected_printer.serial,preset_name=selected_printer.preset;
     const auto selection_key=preset_name+"|"+address+"|"+serial+"|"+selected_printer.device.clientId;
     const auto now=std::chrono::steady_clock::now();

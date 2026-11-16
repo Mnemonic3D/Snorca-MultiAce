@@ -125,11 +125,9 @@ std::string connected_lan_address(const nlohmann::json& result, const std::strin
     if (serial_number.empty() || !result.is_object() || !result.contains("devices") || !result["devices"].is_array())
         return {};
     std::string address;
-    unsigned matches = 0;
     for (const auto& device : result["devices"]) {
         if (!device.is_object() || !device.contains("sn") || device["sn"] != serial_number)
             continue;
-        ++matches;
         if (!device.contains("connected") || device["connected"] != true ||
             !device.contains("ip") || !device["ip"].is_string())
             continue;
@@ -137,10 +135,15 @@ std::string connected_lan_address(const nlohmann::json& result, const std::strin
         if (device.contains("type") && device["type"] != "LAN" && device["type"] != "lan")
             continue;
         const auto ip = device["ip"].get<std::string>();
-        if (SnorcaFilamentSync::valid_lan_ipv4(ip))
-            address = ip;
+        if (!SnorcaFilamentSync::valid_lan_ipv4(ip))
+            continue;
+        // LAN/cloud entries may describe the same printer. Only competing LAN
+        // endpoints are ambiguous; duplicate evidence for one endpoint is safe.
+        if (!address.empty() && address != ip)
+            return {};
+        address = ip;
     }
-    return matches == 1 ? address : std::string{};
+    return address;
 }
 
 std::optional<CurrentDevice> parse_current_device(const nlohmann::json& result)

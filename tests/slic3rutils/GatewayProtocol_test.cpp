@@ -188,8 +188,21 @@ TEST_CASE("Fresh profile gateway pairing resolves only a unique connected LAN id
         devices["devices"][0]["type"] = "WAN";
         REQUIRE(connected_lan_address(devices, "U1-NEW").empty());
     }
-    SECTION("duplicate serials are ambiguous") {
+    SECTION("duplicate entries for one endpoint are safe") {
         devices["devices"].push_back(devices["devices"][0]);
+        REQUIRE(connected_lan_address(devices, "U1-NEW") == "192.168.1.30");
+    }
+    SECTION("cloud entry does not hide a verified LAN endpoint") {
+        auto cloud = devices["devices"][0];
+        cloud["type"] = "WAN";
+        cloud["ip"] = "10.0.0.1";
+        devices["devices"].push_back(cloud);
+        REQUIRE(connected_lan_address(devices, "U1-NEW") == "192.168.1.30");
+    }
+    SECTION("competing LAN endpoints remain ambiguous") {
+        auto other = devices["devices"][0];
+        other["ip"] = "192.168.1.31";
+        devices["devices"].push_back(other);
         REQUIRE(connected_lan_address(devices, "U1-NEW").empty());
     }
     SECTION("invalid and public addresses are rejected") {

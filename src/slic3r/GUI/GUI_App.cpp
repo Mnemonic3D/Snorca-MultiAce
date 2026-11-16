@@ -5914,21 +5914,52 @@ void GUI_App::stop_gateway_service()
 
 bool GUI_App::gateway_device_connected() const { return m_gateway_device.connected && !m_gateway_device.serial_number.empty(); }
 
+void GUI_App::refresh_gateway_connection()
+{
+    // Read-only retry: never disconnect, pair or take another printer's connection.
+    const auto now = std::chrono::steady_clock::now();
+    if ((m_gateway_current_query_active && now - m_gateway_current_query_started > std::chrono::seconds(10)) ||
+        (m_gateway_device.address_query_active && now - m_gateway_device.address_query_started > std::chrono::seconds(10))) {
+        ++m_gateway_current_query_ticket;
+        m_gateway_current_query_active = false;
+        m_gateway_current_refresh_pending = false;
+        clear_gateway_device();
+    }
+    const auto retry_delay = m_gateway_device.lan_address.empty() ? std::chrono::seconds(2) : std::chrono::seconds(10);
+    if (!m_gateway_current_query_active && !m_gateway_device.address_query_active &&
+        now - m_gateway_current_query_started >= retry_delay)
+        query_gateway_current_device();
+}
+
 void GUI_App::query_gateway_current_device()
 {
     if (!m_gateway_service)
         return;
 
+    if (m_gateway_current_query_active) {
+        m_gateway_current_refresh_pending = true;
+        return;
+    }
+    m_gateway_current_query_active = true;
+    m_gateway_current_query_started = std::chrono::steady_clock::now();
+    const auto query_ticket = ++m_gateway_current_query_ticket;
     const std::uint64_t generation = m_gateway_device.generation;
     m_gateway_service->request("query.device.current", nlohmann::json::object(),
-                               [this, generation](Gateway::GatewayError error, const nlohmann::json& result) {
+                               [this, generation, query_ticket](Gateway::GatewayError error, const nlohmann::json& result) {
+                                   if (query_ticket != m_gateway_current_query_ticket)
+                                       return;
+                                   m_gateway_current_query_active = false;
+                                   if (m_gateway_current_refresh_pending) {
+                                       m_gateway_current_refresh_pending = false;
+                                       CallAfter([this] { query_gateway_current_device(); });
+                                   }
                                    if (generation != m_gateway_device.generation)
                                        return;
 
                                    if (error) {
                                        BOOST_LOG_TRIVIAL(warning)
                                            << "[gateway][device-status] failed to query current device: " << error.message;
-                                       m_gateway_device.connected = false;
+                                       clear_gateway_device();
                                        if (mainframe != nullptr && mainframe->plater() != nullptr)
                                            mainframe->plater()->sidebar().update_all_preset_comboboxes(false);
                                        return;
@@ -5937,7 +5968,7 @@ void GUI_App::query_gateway_current_device()
                                    const auto current_device = Gateway::parse_current_device(result);
                                    if (!current_device.has_value() || !current_device->valid) {
                                        BOOST_LOG_TRIVIAL(warning) << "[gateway][device-status] current device response is invalid";
-                                       m_gateway_device.connected = false;
+                                       clear_gateway_device();
                                        return;
                                    }
                                    if (!current_device->connected || current_device->serial_number.empty()) {
@@ -5952,17 +5983,25 @@ void GUI_App::query_gateway_current_device()
                                    }
                                    m_gateway_device.serial_number = current_device->serial_number;
                                    m_gateway_device.connected     = true;
-                                   m_gateway_device.lan_address.clear();
-                                   const auto address_generation = m_gateway_device.generation;
-                                   const auto address_serial = current_device->serial_number;
-                                   m_gateway_service->request("query.device.list", nlohmann::json::object(),
-                                       [this, address_generation, address_serial](Gateway::GatewayError list_error, const nlohmann::json& devices) {
-                                           if (address_generation != m_gateway_device.generation ||
-                                               address_serial != m_gateway_device.serial_number || !m_gateway_device.connected)
-                                               return;
-                                           m_gateway_device.lan_address = list_error ? std::string{} :
-                                               Gateway::connected_lan_address(devices, address_serial);
-                                       });
+                                   // Keep the verified address while refreshing the same connection.
+                                   // clear_gateway_device() invalidates it on a switch/disconnect.
+                                   if (!m_gateway_device.address_query_active) {
+                                       m_gateway_device.address_query_active = true;
+                                       m_gateway_device.address_query_started = std::chrono::steady_clock::now();
+                                       const auto address_generation = m_gateway_device.generation;
+                                       const auto address_serial = current_device->serial_number;
+                                       m_gateway_service->request("query.device.list", nlohmann::json::object(),
+                                           [this, address_generation, address_serial](Gateway::GatewayError list_error, const nlohmann::json& devices) {
+                                               if (address_generation != m_gateway_device.generation ||
+                                                   address_serial != m_gateway_device.serial_number || !m_gateway_device.connected)
+                                                   return;
+                                               m_gateway_device.address_query_active = false;
+                                               m_gateway_device.lan_address = list_error ? std::string{} :
+                                                   Gateway::connected_lan_address(devices, address_serial);
+                                               if (mainframe != nullptr && mainframe->plater() != nullptr)
+                                                   mainframe->plater()->sidebar().update_all_preset_comboboxes(false);
+                                           });
+                                   }
                                    BOOST_LOG_TRIVIAL(info)
                                        << "[gateway][device-status] current device applied, sn=" << m_gateway_device.serial_number;
 

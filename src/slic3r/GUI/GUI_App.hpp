@@ -378,11 +378,17 @@ private:
         std::string   serial_number;
         std::string   lan_address;
         bool          connected{false};
+        bool          address_query_active{false};
+        std::chrono::steady_clock::time_point address_query_started{};
         bool          objects_query_active{false};
         bool          objects_refresh_pending{false};
         std::string   watched_serial_number;
     };
     GatewayDeviceState m_gateway_device;
+    bool m_gateway_current_query_active{false};
+    std::uint64_t m_gateway_current_query_ticket{0};
+    std::chrono::steady_clock::time_point m_gateway_current_query_started{};
+    bool m_gateway_current_refresh_pending{false};
     std::string m_gateway_loaded_base_url;
 
   public:
@@ -615,6 +621,9 @@ private:
     std::string     gateway_lan_address() const { return gateway_device_connected() ? m_gateway_device.lan_address : std::string{}; }
     std::string     gateway_serial_number() const { return gateway_device_connected() ? m_gateway_device.serial_number : std::string{}; }
     std::uint64_t   gateway_device_generation() const { return m_gateway_device.generation; }
+
+    void            refresh_gateway_connection();
+    bool            gateway_address_pending() const { return m_gateway_current_query_active || m_gateway_device.address_query_active; }
 
     void            switch_staff_pick(bool on);
     bool            check_privacy_update();
