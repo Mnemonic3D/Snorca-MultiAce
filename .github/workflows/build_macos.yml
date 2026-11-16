@@ -24,6 +24,11 @@ on:
         description: "Version text used in the file names (for example 2.4.1-snorca.2)"
         required: true
         default: "2.4.1-snorca.2"
+      runner_image:
+        description: "Apple Silicon runner image (alternative when one pool lacks capacity)"
+        type: choice
+        options: [macos-15, macos-26]
+        default: macos-15
       reuse_dependencies:
         description: "Use existing exact dependency caches (fails if unavailable)"
         type: boolean
@@ -49,7 +54,7 @@ jobs:
   deps:
     if: ${{ !inputs.reuse_dependencies }}
     name: dependencies (${{ matrix.arch }})
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner_image || 'macos-15' }}
     timeout-minutes: 350
     strategy:
       fail-fast: false
@@ -134,7 +139,7 @@ jobs:
     if: ${{ always() && (needs.deps.result == 'success' || inputs.reuse_dependencies) }}
     name: slicer and disk image (${{ matrix.arch }})
     needs: deps
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner_image || 'macos-15' }}
     timeout-minutes: 350
     strategy:
       fail-fast: false
