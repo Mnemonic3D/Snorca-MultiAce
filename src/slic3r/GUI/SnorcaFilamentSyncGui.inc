@@ -123,8 +123,8 @@ static SnorcaSelectedPrinter snorca_selected_printer()
                 ? "Waiting for the printer's LAN address. Auto sync will retry; existing filaments kept."
                 : "Printer connected, but its LAN address is unavailable. Check LAN mode in Device; existing filaments kept.");
         if (connected_address != result.address)
-            throw std::runtime_error("Printer address mismatch: Prepare uses " + result.address +
-                ", Device uses " + connected_address +
+            throw std::runtime_error("Prepare and Device use different printer addresses. Prepare: " + result.address +
+                "; Device: " + connected_address +
                 ". Select the same printer or correct its multiACE address; existing filaments kept.");
         result.gateway = true;
         result.gateway_generation = wxGetApp().gateway_device_generation();
