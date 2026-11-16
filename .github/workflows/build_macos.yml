@@ -190,6 +190,9 @@ jobs:
           brew install ninja libtool gettext
           echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
 
+      - name: Refresh generated dependency SDK paths
+        run: python3 scripts/relocate_macos_sdk.py "deps/build/${{ matrix.arch }}/OrcaSlicer_dep/usr/local"
+
       - name: Build slicer
         env:
           # 3 cores / 7 GB on the runner; keep the compile from running out of memory.
