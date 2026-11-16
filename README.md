@@ -141,7 +141,7 @@ A missing connection or an IP mismatch keeps your previous palette and explains 
 <details>
 <summary><b>For developers: source and building</b></summary>
 
-This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top, merged with [Snapmaker Orca](https://github.com/Snapmaker/OrcaSlicer) v2.4.1 (commit `bac6fd5c1e1c23ddf057cf6471ba4ed7ed621c4c`, full history). The upstream build instructions are in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md). The platform build workflows are in `.github/workflows/`. They support manual runs; Windows and Mac also run when their workflow files change on the `ci-windows-macos` branch.
+This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top, merged with [Snapmaker Orca](https://github.com/Snapmaker/OrcaSlicer) v2.4.1 (commit `bac6fd5c1e1c23ddf057cf6471ba4ed7ed621c4c`, full history). The upstream build instructions are in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md). The platform build workflows are in `.github/workflows/`. They support manual runs; Windows also runs when its workflow file changes on the `ci-windows-macos` branch. Mac can reuse exact dependency caches so each architecture can start independently.
 
 The touch-screen label installer is in [`ace-label-installer/`](ace-label-installer/): Go with an FLTK window, built by the scripts in its `build/` folder.
 

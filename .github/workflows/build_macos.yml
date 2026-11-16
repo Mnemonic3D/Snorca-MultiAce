@@ -5,9 +5,8 @@ name: Build macOS disk images (unsigned)
 # Modelled on Snapmaker Orca 2.4.1's macOS build (build_release_macos.sh, macos-15 runner),
 # without its signing, notarization, Sentry symbol upload and nightly-release upload.
 #
-# Runs when someone presses "Run workflow" in the Actions tab (or: gh workflow run
-# build_macos.yml), and on a push to the ci-windows-macos branch that changes this file.
-# No tag or schedule trigger; pushes to main never start it.
+# Runs manually through Actions or gh workflow run build_macos.yml.
+# No push, tag or schedule trigger.
 # No secrets are used. Nothing is published: the results are workflow artifacts (kept 30 days).
 #
 # NOT SIGNED with an Apple developer identity and NOT notarized. The app is only ad-hoc signed
@@ -25,9 +24,10 @@ on:
         description: "Version text used in the file names (for example 2.4.1-snorca.2)"
         required: true
         default: "2.4.1-snorca.2"
-  push:
-    branches: [ci-windows-macos]
-    paths: [.github/workflows/build_macos.yml]
+      reuse_dependencies:
+        description: "Use existing exact dependency caches (fails if unavailable)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,6 +47,7 @@ env:
 
 jobs:
   deps:
+    if: ${{ !inputs.reuse_dependencies }}
     name: dependencies (${{ matrix.arch }})
     runs-on: macos-15
     timeout-minutes: 350
@@ -130,6 +131,7 @@ jobs:
           key: ${{ steps.depkey.outputs.key }}
 
   slicer:
+    if: ${{ always() && (needs.deps.result == 'success' || inputs.reuse_dependencies) }}
     name: slicer and disk image (${{ matrix.arch }})
     needs: deps
     runs-on: macos-15
