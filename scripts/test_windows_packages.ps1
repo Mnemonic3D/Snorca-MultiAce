@@ -31,7 +31,20 @@ function Test-Package($root, $label) {
         $bitmap.Save("$evidence/$label-desktop.png")
         $graphics.Dispose()
         $bitmap.Dispose()
-        @{ package=$label; title=$process.MainWindowTitle; window=$process.MainWindowHandle.ToInt64(); fresh_profile=$profile; binary_sha256=(Get-FileHash $exe).Hash; scope='Startup only; screenshot needs review; no physical printer test' } | ConvertTo-Json | Set-Content "$evidence/$label.json"
+        # Ctrl+N is the application's New Project shortcut and opens Prepare.
+        $shell = New-Object -ComObject WScript.Shell
+        if (-not $shell.AppActivate($process.Id)) { throw "Could not activate $label window" }
+        [System.Windows.Forms.SendKeys]::SendWait('^n')
+        Start-Sleep -Seconds 15
+        $process.Refresh()
+        if ($process.HasExited) { throw "$label exited while opening Prepare" }
+        $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+        $bitmap.Save("$evidence/$label-prepare.png")
+        $graphics.Dispose()
+        $bitmap.Dispose()
+        @{ package=$label; title=$process.MainWindowTitle; window=$process.MainWindowHandle.ToInt64(); fresh_profile=$profile; binary_sha256=(Get-FileHash $exe).Hash; core_sha256=(Get-FileHash (Join-Path $root 'FOrcaSlicer-core.dll')).Hash; scope='Home and Prepare startup; screenshots need review; no physical printer test' } | ConvertTo-Json | Set-Content "$evidence/$label.json"
     } finally {
         if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
         Get-Process snapmaker_control_windows_x64 -ErrorAction SilentlyContinue | Stop-Process -Force
