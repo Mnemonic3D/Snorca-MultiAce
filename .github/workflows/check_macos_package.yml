@@ -1,0 +1,41 @@
+name: Check an existing Mac disk image
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build run containing the disk image
+        required: true
+      arch:
+        type: choice
+        options: [arm64, x86_64]
+        default: arm64
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          pattern: Snorca_MultiAce_Mac_${{ inputs.arch }}_*
+          merge-multiple: true
+          path: dist
+      - name: Fresh launch and connection-helper diagnostics
+        env:
+          PACKAGE_ARCH: ${{ inputs.arch }}
+        run: bash scripts/check_macos_package.sh
+      - name: Save diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mac-${{ inputs.arch }}-package-check-${{ inputs.run_id }}
+          path: package-test-results/
+          if-no-files-found: error
