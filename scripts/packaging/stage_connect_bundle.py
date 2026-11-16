@@ -247,6 +247,26 @@ def brand_snorca(web_dir: Path) -> None:
             print(f"Named {SNORCA_NAME} in {text.count('exported by Snapmaker Orca')} English printer messages")
 
 
+def configure_macos_web_renderer(web_dir: Path) -> None:
+    """Avoid CanvasKit WebGL startup failures in macOS WKWebView.
+
+    This affects the embedded Home/Device web UI, not the native 3D viewport.
+    The custom entrypoint callback must pass options to initializeEngine itself.
+    """
+    files = list(web_dir.glob("flutter_bootstrap*.js"))
+    if len(files) != 1:
+        raise RuntimeError("expected one Flutter bootstrap for macOS renderer configuration")
+    path = files[0]
+    text = path.read_text(encoding="utf-8")
+    original = "engineInitializer.initializeEngine()"
+    replacement = "engineInitializer.initializeEngine({canvasKitForceCpuOnly: true})"
+    if text.count(replacement) == 1 and original not in text:
+        return
+    if text.count(original) != 1:
+        raise RuntimeError("unrecognized Flutter engine initializer; macOS renderer was not configured")
+    path.write_text(text.replace(original, replacement), encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", default=".github/connect-bundle.lock.json", help="connect bundle lock file")
@@ -293,6 +313,8 @@ def main() -> int:
         replace_directory(web_sources[0], resources_dir / "web" / "flutter_web", resources_dir)
         strip_analytics(resources_dir / "web" / "flutter_web")
         brand_snorca(resources_dir / "web" / "flutter_web")
+        if args.platform == "macos-universal":
+            configure_macos_web_renderer(resources_dir / "web" / "flutter_web")
 
     print(f"Staged connect CLI and flutter_web into {resources_dir}")
     return 0

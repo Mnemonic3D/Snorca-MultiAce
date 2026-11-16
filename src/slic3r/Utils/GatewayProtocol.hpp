@@ -50,7 +50,7 @@ struct CurrentDevice
     std::string serial_number;
 };
 
-// Only a unique connected LAN entry may bind a multiACE address to a gateway identity.
+// Only an unambiguous connected LAN endpoint may bind a multiACE address to a gateway identity.
 std::string connected_lan_address(const nlohmann::json& devices, const std::string& serial_number);
 
 struct HttpResponse
