@@ -3,6 +3,7 @@ import http.server
 import json
 import pathlib
 import os
+import socketserver
 import sys
 import urllib.parse
 
@@ -61,6 +62,14 @@ class Recorder(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-server = http.server.HTTPServer(("127.0.0.1", 39751), Recorder)
+class LoopbackServer(http.server.HTTPServer):
+    def server_bind(self):
+        # No reverse DNS is needed for this private loopback recorder. Hosted Mac
+        # resolvers can block getfqdn(), which HTTPServer normally calls here.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
+
+server = LoopbackServer(("127.0.0.1", 39751), Recorder)
 (evidence / "recorder-ready").touch()
 server.serve_forever()
