@@ -87,8 +87,8 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 | System | What to download |
 |---|---|
 | **Linux** (64-bit) | The `Snorca-MultiAce-2.4.1-snorca.2-linux-x86_64.tar.xz` file from the newest release. Unpack it and run `AppRun`. It uses the same settings folder as snorca.3; back it up first. |
-| **Windows** (64-bit) | The snorca.3 installer `.exe` or portable `.zip` (Snapmaker Orca 2.3.2 base, without the printer-switch fix). A 2.4.1 Windows build is not ready yet. Windows shows an "unknown publisher" warning. |
-| **Mac** | Not planned for now. |
+| **Windows** (64-bit) | The snorca.3 installer `.exe` or portable `.zip` (Snapmaker Orca 2.3.2 base, without the printer-switch fix). The [2.4.1 Windows installer and portable build](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/runs/43912419720) is being built and checked with fresh profiles; it is not ready to download yet. Windows shows an "unknown publisher" warning. |
+| **Mac** | [Apple Silicon and Intel builds](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/runs/43912420027) are being built and checked. Downloads are not ready yet; these builds will be ad-hoc signed, without Apple notarization. |
 | **Touch-screen label installer** (optional) | Windows: the `...ACE-screen-label-installer-EXPERIMENTAL-windows-x64.exe` file. Linux: the `...ACE-screen-label-installer-EXPERIMENTAL-linux-x64` file; make it executable (`chmod +x`) and run it. One file, nothing to install on your PC. Windows shows an "unknown publisher" warning. |
 
 ## First setup on a new computer
@@ -141,7 +141,7 @@ A missing connection or an IP mismatch keeps your previous palette and explains 
 <details>
 <summary><b>For developers: source and building</b></summary>
 
-This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top, merged with [Snapmaker Orca](https://github.com/Snapmaker/OrcaSlicer) v2.4.1 (commit `bac6fd5c1e1c23ddf057cf6471ba4ed7ed621c4c`, full history). The upstream build instructions are in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md). The Windows and Linux builds run on GitHub's machines from `.github/workflows/` and start only when someone presses "Run workflow".
+This repository holds the full source: upstream FOrcaSlicer v2.3.2-fos.8.6.8 (commit `0b1f80cd22793785d8ae5c4296d2fe4a9248bd21` of [jiyang1018/FOrcaSlicer](https://github.com/jiyang1018/FOrcaSlicer)) with the Snorca MultiAce changes on top, merged with [Snapmaker Orca](https://github.com/Snapmaker/OrcaSlicer) v2.4.1 (commit `bac6fd5c1e1c23ddf057cf6471ba4ed7ed621c4c`, full history). The upstream build instructions are in [README-FOrcaSlicer-upstream.md](README-FOrcaSlicer-upstream.md). The platform build workflows are in `.github/workflows/`. They support manual runs; Windows and Mac also run when their workflow files change on the `ci-windows-macos` branch.
 
 The touch-screen label installer is in [`ace-label-installer/`](ace-label-installer/): Go with an FLTK window, built by the scripts in its `build/` folder.
 
