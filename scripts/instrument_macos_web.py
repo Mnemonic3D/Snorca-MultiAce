@@ -45,7 +45,11 @@ if os.environ.get("FORCE_CPU_RENDERER") == "true":
     content = bootstrap.read_text()
     marker = "canvasKitBaseUrl: 'canvaskit/'"
     assert content.count(marker) == 1
-    bootstrap.write_text(content.replace(marker, marker + ", canvasKitForceCpuOnly: true"))
+    engine_call = "engineInitializer.initializeEngine()"
+    assert content.count(engine_call) == 1
+    content = content.replace(marker, marker + ", canvasKitForceCpuOnly: true")
+    content = content.replace(engine_call, "engineInitializer.initializeEngine({canvasKitForceCpuOnly: true})")
+    bootstrap.write_text(content)
     (evidence / "cpu-renderer-test.txt").write_text("Diagnostic copy only: CanvasKit forced to software rendering.\n")
 
 (evidence / "instrumentation.txt").write_text("Diagnostic copy only: HTML error hooks inserted and app ad-hoc signed again. Original DMG unchanged.\n")
