@@ -10,7 +10,7 @@ It makes ACE colour printing on the U1 simple: pick your printer, the slicer rea
 
 **Get the updates as they come:** star and watch this repository, and follow and like [Mnemonic ThreeDs on Facebook](https://www.facebook.com/profile.php?id=61565356706003) and [Mnemonic3D on YouTube](https://youtube.com/@Mnemonic3D).
 
-> **New, 16 November: 2.4.1-snorca.2 (Linux).** Fixes filament sync on fresh installations, keeps the older Auto preference, and fixes launching from folders with spaces. Tested with a clean profile and checked on the author's Linux setup. Switching printers takes a moment while the printer responds. [Download and release notes](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.4.1-snorca.2)
+> **New, 16 November: 2.4.1-snorca.2 (Windows and Linux).** The Windows installer and portable ZIP are now available. Fixes fresh-profile filament sync and missing Windows portable web files, keeps the older Auto preference, and fixes Linux launching from folders with spaces. Windows Home and Prepare passed clean-profile startup checks; the author also checked Linux on his setup. Switching printers takes a moment while the printer responds. [Download and release notes](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.4.1-snorca.2)
 
 ---
 
@@ -82,12 +82,12 @@ Those two projects are made by other people; follow their instructions to instal
 
 Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-MultiAce/releases)**.
 
-**Newest: [2.4.1-snorca.2](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.4.1-snorca.2)** (Linux, built on Snapmaker Orca 2.4.1, includes the fresh-install and launcher fixes). Windows users stay on [snorca.3](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.3.2-snorca.3) for now.
+**Newest: [2.4.1-snorca.2](https://github.com/Mnemonic3D/Snorca-MultiAce/releases/tag/v2.4.1-snorca.2)** (Windows and Linux, built on Snapmaker Orca 2.4.1, includes the fresh-install and packaging fixes).
 
 | System | What to download |
 |---|---|
 | **Linux** (64-bit) | The `Snorca-MultiAce-2.4.1-snorca.2-linux-x86_64.tar.xz` file from the newest release. Unpack it and run `AppRun`. It uses the same settings folder as snorca.3; back it up first. |
-| **Windows** (64-bit) | The snorca.3 installer `.exe` or portable `.zip` (Snapmaker Orca 2.3.2 base, without the printer-switch fix). The [2.4.1 Windows installer and portable build](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/workflows/build_windows.yml) is being built and checked with fresh profiles; it is not ready to download yet. Windows shows an "unknown publisher" warning. |
+| **Windows** (64-bit) | The `Snorca_MultiAce_Windows_Installer_V2.4.1-snorca.2.exe` or `Snorca_MultiAce_Windows_Portable_V2.4.1-snorca.2.zip` from the newest release. Extract the entire ZIP before starting `FOrcaSlicer.exe`. Back up your settings first. Windows shows an "unknown publisher" warning; allow WebView2 installation if the app prompts for it. |
 | **Mac** | [Apple Silicon and Intel builds](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/workflows/build_macos.yml) are being built and checked. Downloads are not ready yet; these builds will be ad-hoc signed, without Apple notarization. |
 | **Touch-screen label installer** (optional) | Windows: the `...ACE-screen-label-installer-EXPERIMENTAL-windows-x64.exe` file. Linux: the `...ACE-screen-label-installer-EXPERIMENTAL-linux-x64` file; make it executable (`chmod +x`) and run it. One file, nothing to install on your PC. Windows shows an "unknown publisher" warning. |
 
@@ -105,12 +105,12 @@ A missing connection or an IP mismatch keeps your previous palette and explains 
 
 ## Where it stands
 
-- **2.4.1-snorca.2** was built and tested with an empty profile on Linux, and the author confirmed it works on his Linux setup. The Windows portable web-file packaging fix is in the source; there is no new Windows or Mac binary in this release.
+- **2.4.1-snorca.2** was built and tested with an empty profile on Linux, and the author confirmed it works on his Linux setup. The Windows installer and portable ZIP passed empty-profile Home and Prepare startup checks on fresh Windows Server 2022 GitHub runners; packaged web assets and checksums were verified. Physical printer testing on Windows 10/11 remains unverified. Mac builds are in progress; no Mac binary is published yet.
 
 - **2.4.1-snorca.1** (Snapmaker Orca 2.4.1 base) was tried by the author on Linux. Not tried yet: Windows and Mac, mixed filaments with multiACE sync, Snapmaker sign-in, usage data switched on. Details on the release page.
 - **Test release.** Tried on two real U1 printers and on a simulated printer. Expect rough edges.
 - **snorca.3** (chamber options, automatic filament move, Print window on every print) was tried by the author on his own printer on Linux. A full print with the DragonBreath filter and heat on together has not been run yet.
-- **Windows** has only been tried in a Windows 11 test machine, not on a real printer. The newest Windows files (snorca.3) have not been run by us.
+- **Windows 2.4.1-snorca.2** has been installed and launched from both package formats on clean build runners, with Home and Prepare screenshots reviewed. It has not been tested against a physical printer on Windows 10/11.
 - **More than one ACE at once** is written for but only tested with one.
 - **The touch-screen label installer** was run by the author from Linux on one of his own printers, which was already unlocked. The unlock step and the Windows program have only been run against a simulated printer (Windows in a Windows 11 test machine).
 - Some screens in other languages still show the old name.
