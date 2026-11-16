@@ -35,10 +35,18 @@ sleep 30
 screencapture -x "$EVIDENCE/home-30s.png"
 sleep 60
 screencapture -x "$EVIDENCE/home-90s.png"
-swift scripts/macos_test_click.swift 110 48
+# Standard hosted runners use different desktop/window sizes. These coordinates
+# were checked against their captured startup images; all resulting images still
+# require review (a process exit code does not prove that a tab rendered).
+if test "$(uname -m)" = x86_64; then
+  PREPARE_X=480; HOME_X=380; TAB_Y=130
+else
+  PREPARE_X=110; HOME_X=20; TAB_Y=48
+fi
+swift scripts/macos_test_click.swift "$PREPARE_X" "$TAB_Y"
 sleep 10
 screencapture -x "$EVIDENCE/prepare.png"
-swift scripts/macos_test_click.swift 20 48
+swift scripts/macos_test_click.swift "$HOME_X" "$TAB_Y"
 sleep 5
 screencapture -x "$EVIDENCE/home-return.png"
 ps -axo pid,ppid,command | grep -E 'FOrcaSlicer|snapmaker_control' >"$EVIDENCE/processes.txt" || true
