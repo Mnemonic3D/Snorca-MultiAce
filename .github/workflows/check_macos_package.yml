@@ -6,6 +6,10 @@ on:
       run_id:
         description: Build run containing the disk image
         required: true
+      runner_image:
+        type: choice
+        options: [macos-26, macos-15]
+        default: macos-26
       arch:
         type: choice
         options: [arm64, x86_64]
@@ -17,7 +21,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner_image }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
