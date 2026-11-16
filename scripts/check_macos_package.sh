@@ -15,6 +15,8 @@ hdiutil detach "$MOUNT"
 codesign --verify --deep --strict --verbose=2 "$APP"
 PROFILE="$RUNNER_TEMP/snorca-check-empty-profile"
 test ! -e "$PROFILE"
+mkdir -p "$PROFILE"
+printf '%s\n' '{"app":{"log_severity_level":"trace"}}' > "$PROFILE/Snapmaker_Orca.conf"
 "$APP/Contents/MacOS/FOrcaSlicer" --datadir "$PROFILE" >"$EVIDENCE/stdout.txt" 2>"$EVIDENCE/stderr.txt" &
 PID=$!
 trap 'kill "$PID" 2>/dev/null || true' EXIT
