@@ -13,21 +13,34 @@ mkdir -p "$(dirname "$APP")"
 ditto "$MOUNT/FOrcaSlicer.app" "$APP"
 hdiutil detach "$MOUNT"
 codesign --verify --deep --strict --verbose=2 "$APP"
+if test "${WEB_DIAGNOSTICS:-false}" = true; then
+  python3 scripts/instrument_macos_web.py "$APP" "$EVIDENCE" &
+  RECORDER_PID=$!
+  sleep 2
+  codesign --force --deep --sign - "$APP"
+fi
 PROFILE="$RUNNER_TEMP/snorca-check-empty-profile"
 test ! -e "$PROFILE"
 mkdir -p "$PROFILE"
 printf '%s\n' '{"app":{"log_severity_level":"trace"}}' > "$PROFILE/FOrcaSlicer.conf"
 "$APP/Contents/MacOS/FOrcaSlicer" --datadir "$PROFILE" >"$EVIDENCE/stdout.txt" 2>"$EVIDENCE/stderr.txt" &
 PID=$!
-trap 'kill "$PID" 2>/dev/null || true' EXIT
+trap 'kill "$PID" ${RECORDER_PID:-} 2>/dev/null || true' EXIT
 sleep 30
 screencapture -x "$EVIDENCE/home-30s.png"
 sleep 60
 screencapture -x "$EVIDENCE/home-90s.png"
+if test "${WEB_DIAGNOSTICS:-false}" = true; then
+  swift scripts/macos_test_click.swift 110 48
+  sleep 10
+  screencapture -x "$EVIDENCE/prepare.png"
+fi
 ps -axo pid,ppid,command | grep -E 'FOrcaSlicer|snapmaker_control' >"$EVIDENCE/processes.txt" || true
 if test -d "$PROFILE/log"; then cp -R "$PROFILE/log" "$EVIDENCE/app-log"; fi
 ls -l "$APP/Contents/Resources"/snapmaker_control_macos_* >"$EVIDENCE/helper-modes.txt"
 kill "$PID" 2>/dev/null || true
+sleep 3
+kill -9 "$PID" 2>/dev/null || true
 wait "$PID" 2>/dev/null || true
 pkill -f '/Contents/Resources/snapmaker_control_macos_' || true
 if test "$PACKAGE_ARCH" = arm64; then HELPER=snapmaker_control_macos_arm64; else HELPER=snapmaker_control_macos_x64; fi

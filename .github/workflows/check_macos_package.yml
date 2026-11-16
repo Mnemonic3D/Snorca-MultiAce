@@ -10,6 +10,9 @@ on:
         type: choice
         options: [macos-26, macos-15]
         default: macos-26
+      web_diagnostics:
+        type: boolean
+        default: false
       arch:
         type: choice
         options: [arm64, x86_64]
@@ -34,6 +37,7 @@ jobs:
           path: dist
       - name: Fresh launch and connection-helper diagnostics
         env:
+          WEB_DIAGNOSTICS: ${{ inputs.web_diagnostics }}
           PACKAGE_ARCH: ${{ inputs.arch }}
         run: bash scripts/check_macos_package.sh
       - name: Save diagnostic evidence
