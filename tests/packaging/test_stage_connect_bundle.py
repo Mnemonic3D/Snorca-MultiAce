@@ -12,6 +12,29 @@ SPEC.loader.exec_module(stage_connect_bundle)
 
 
 class StageConnectBundleTest(unittest.TestCase):
+    def test_macos_renderer_reaches_custom_engine_initializer(self) -> None:
+        for name in ("flutter_bootstrap.js", "flutter_bootstrap.hash.js"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                bootstrap = root / name
+                bootstrap.write_text("engineInitializer.initializeEngine().then(runApp)", encoding="utf-8")
+                stage_connect_bundle.configure_macos_web_renderer(root)
+                expected = "engineInitializer.initializeEngine({canvasKitForceCpuOnly: true}).then(runApp)"
+                self.assertEqual(bootstrap.read_text(), expected)
+                stage_connect_bundle.configure_macos_web_renderer(root)
+                self.assertEqual(bootstrap.read_text(), expected)
+
+    def test_macos_renderer_rejects_unknown_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaises(RuntimeError):
+                stage_connect_bundle.configure_macos_web_renderer(root)
+            bootstrap = root / "flutter_bootstrap.js"
+            bootstrap.write_text("engineInitializer.changedAPI()", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                stage_connect_bundle.configure_macos_web_renderer(root)
+            self.assertEqual(bootstrap.read_text(), "engineInitializer.changedAPI()")
+
     def test_identical_web_fingerprints(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             first = Path(temporary) / "first"
