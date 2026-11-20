@@ -91,15 +91,15 @@ Get the files from the **[Releases page](https://github.com/Mnemonic3D/Snorca-Mu
 | **Mac** | [Apple Silicon and Intel builds](https://github.com/Mnemonic3D/Snorca-MultiAce/actions/workflows/build_macos.yml) are being built and checked. Downloads are not ready yet; these builds will be ad-hoc signed, without Apple notarization. |
 | **Touch-screen label installer** (optional) | Windows: the `...ACE-screen-label-installer-EXPERIMENTAL-windows-x64.exe` file. Linux: the `...ACE-screen-label-installer-EXPERIMENTAL-linux-x64` file; make it executable (`chmod +x`) and run it. One file, nothing to install on your PC. Windows shows an "unknown publisher" warning. |
 
-## Local connections and planned phone access
+## Local connections and phone monitoring
 
 Snorca MultiAce currently supports local LAN printer connections. Snapmaker cloud/account-based remote connections are not supported in this build. **Wi-Fi still works for a local LAN connection**; LAN does not mean an Ethernet cable is required. Add the printer by its local IP address in Home or Device.
 
-For access away from home, a **phone-browser setup over Tailscale is planned**. Install Tailscale on your phone and on a PC that stays powered on and connected to the printer's LAN, and sign both into the same Tailscale network. The setup guide is coming; installation alone does not complete the connection.
+For remote phone access, follow **[PAXX's Tailscale setup instructions](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware/blob/develop/docs/vpn.md)**. PAXX supports installing Tailscale directly on the printer through Firmware Config > Remote Access > VPN Provider. Complete the login steps in their guide and connect your phone to the same Tailscale network. This printer-direct method does not require a PC to stay powered on.
 
-The planned route is to reach the printer/multiACE web interface through a configured Tailscale subnet router on the PC. A local web service can alternatively be shared privately using Tailscale Serve. These are browser interfaces; the Snorca desktop slicer itself does not become a web app. The exact supported setup still needs end-to-end phone testing before the guide is published.
+You can access the printer's Fluidd/Mainsail web interface from your phone browser over Tailscale. For a monitoring app, see **[PAXX's monitoring documentation](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware/blob/develop/docs/monitoring.md#moonraker-api-built-in-metrics)**, which lists Mobileraker and OctoApp as Moonraker clients; follow your chosen app's connection instructions as well. This provides access to the printer's interface, not a browser version of the Snorca desktop slicer.
 
-Tailscale is optional for normal local printing. See [Tailscale subnet routers](https://tailscale.com/docs/features/subnet-routers) and [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) for the underlying networking options.
+PAXX marks VPN remote access **experimental** and warns that its CPU/memory use may affect printing; follow their performance guidance. Tailscale is optional for normal local printing. These links describe PAXX's supported route, not a claim that Snorca remote slicing, printer discovery or ACE printing over Tailscale has been tested.
 
 ## First setup on a new computer
 
