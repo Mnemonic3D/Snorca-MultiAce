@@ -175,13 +175,17 @@ inline json normalize(const json& state, const std::string& printer_id, const st
                     return std::isalnum(c) || c == '-' || c == '_' || c == '.';
                 }), "printer_id must be a nonempty stable serial");
     require(state.is_object(), "state must be an object");
-    require(text(state, "mode") == "head", "only explicit head mode is supported");
-    require(state.contains("ace_heads") && state.at("ace_heads").is_array() && state.at("ace_heads").size() <= 4,
-            "ace_heads must be an array with at most four heads");
-    require(state.contains("head_feeder") && state.at("head_feeder").is_object() && state.at("head_feeder").size() == 4,
-            "head_feeder must contain all four heads");
-    require(state.contains("head_ace") && state.at("head_ace").is_object() && state.at("head_ace").size() == 4,
-            "head_ace must contain all four heads");
+    const std::string mode  = text(state, "mode");
+    const bool        multi = mode == "multi" || mode == "single";
+    require(multi || mode == "head", "printer must report head or multi mode; existing filaments kept");
+    if (!multi) {
+        require(state.contains("ace_heads") && state.at("ace_heads").is_array() && state.at("ace_heads").size() <= 4,
+                "ace_heads must be an array with at most four heads");
+        require(state.contains("head_feeder") && state.at("head_feeder").is_object() && state.at("head_feeder").size() == 4,
+                "head_feeder must contain all four heads");
+        require(state.contains("head_ace") && state.at("head_ace").is_object() && state.at("head_ace").size() == 4,
+                "head_ace must contain all four heads");
+    }
     require(state.contains("aces") && state.contains("toolheads"), "aces or toolheads missing");
     require(overrides.is_object(), "overrides must be an object scoped to this printer");
     for (auto it = overrides.begin(); it != overrides.end(); ++it) {
@@ -196,35 +200,56 @@ inline json normalize(const json& state, const std::string& printer_id, const st
     const auto heads = indexed(state.at("toolheads"), "toolheads");
     require(heads.size() == 4, "toolheads must include every head 0..3");
     std::set<int> ace_heads;
-    for (const auto& value : state.at("ace_heads")) {
-        const int h = index(value, "ace_heads value");
-        require(ace_heads.insert(h).second, "ace_heads contains a duplicate");
-    }
     std::map<int, int> ace_to_head;
-    for (int h = 0; h < 4; ++h) {
-        const std::string key = std::to_string(h);
-        const json& feeders = state.at("head_feeder");
-        const json& mapping = state.at("head_ace");
-        require(feeders.contains(key) && feeders.at(key).is_boolean() && mapping.contains(key), "head mapping is incomplete");
-        const bool feeder = feeders.at(key).get<bool>();
-        const int unit = index(mapping.at(key), "head_ace mapping");
-        require(feeder != (ace_heads.count(h) != 0), "ace_heads conflicts with head_feeder for head " + key);
-        const json& head = *heads.at(h);
-        if (head.contains("feeder"))
-            require(boolean(head, "feeder") == feeder, "toolhead feeder conflicts with head_feeder");
-        if (!feeder) {
-            require(aces.count(unit) != 0, "head maps to an absent ACE unit");
-            require(ace_to_head.emplace(unit, h).second, "multiple heads map to the same ACE unit");
-            if (head.contains("ace") && !head.at("ace").is_null())
-                require(index(head.at("ace"), "toolhead ace") == unit, "toolhead ACE conflicts with head_ace");
-            if (head.contains("slot") && !head.at("slot").is_null())
-                index(head.at("slot"), "toolhead slot");
-        } else {
-            require(!head.contains("ace") || head.at("ace").is_null(), "external head unexpectedly names an ACE");
-            require(!head.contains("slot") || head.at("slot").is_null(), "external head unexpectedly names an ACE slot");
+    if (!multi) {
+        for (const auto& value : state.at("ace_heads")) {
+            const int h = index(value, "ace_heads value");
+            require(ace_heads.insert(h).second, "ace_heads contains a duplicate");
+        }
+        for (int h = 0; h < 4; ++h) {
+            const std::string key     = std::to_string(h);
+            const json&       feeders = state.at("head_feeder");
+            const json&       mapping = state.at("head_ace");
+            require(feeders.contains(key) && feeders.at(key).is_boolean() && mapping.contains(key), "head mapping is incomplete");
+            const bool feeder = feeders.at(key).get<bool>();
+            const int  unit   = index(mapping.at(key), "head_ace mapping");
+            require(feeder != (ace_heads.count(h) != 0), "ace_heads conflicts with head_feeder for head " + key);
+            const json& head = *heads.at(h);
+            if (head.contains("feeder"))
+                require(boolean(head, "feeder") == feeder, "toolhead feeder conflicts with head_feeder");
+            if (!feeder) {
+                require(aces.count(unit) != 0, "head maps to an absent ACE unit");
+                require(ace_to_head.emplace(unit, h).second, "multiple heads map to the same ACE unit");
+                if (head.contains("ace") && !head.at("ace").is_null())
+                    require(index(head.at("ace"), "toolhead ace") == unit, "toolhead ACE conflicts with head_ace");
+                if (head.contains("slot") && !head.at("slot").is_null())
+                    index(head.at("slot"), "toolhead slot");
+            } else {
+                require(!head.contains("ace") || head.at("ace").is_null(), "external head unexpectedly names an ACE");
+                require(!head.contains("slot") || head.at("slot").is_null(), "external head unexpectedly names an ACE slot");
+            }
+        }
+        require(ace_to_head.size() == aces.size(), "unmapped ACE unit makes routing ambiguous");
+    } else {
+        // Multi topology is transposed: slot N on every unit feeds nozzle N.
+        // head_ace/head_feeder describe HEAD mode and may contain stale defaults.
+        for (int h = 0; h < 4; ++h) {
+            const json& head = *heads.at(h);
+            if (boolean(head, "manual")) {
+                require(!head.contains("ace") || head.at("ace").is_null(), "manual head unexpectedly names an ACE");
+                require(!head.contains("slot") || head.at("slot").is_null(), "manual head unexpectedly names an ACE slot");
+                continue;
+            }
+            ace_heads.insert(h);
+            const bool has_ace  = head.contains("ace") && !head.at("ace").is_null();
+            const bool has_slot = head.contains("slot") && !head.at("slot").is_null();
+            require(has_ace == has_slot, "multi head source is incomplete");
+            if (has_ace) {
+                require(aces.count(index(head.at("ace"), "toolhead ace")), "head maps to an absent ACE unit");
+                require(index(head.at("slot"), "toolhead slot") == h, "multi slot must match its nozzle");
+            }
         }
     }
-    require(ace_to_head.size() == aces.size(), "unmapped ACE unit makes routing ambiguous");
     if (state.contains("wiring")) {
         require(state.at("wiring").is_array() && state.at("wiring").size() <= 4, "wiring must be a bounded array");
         std::set<int> wired_heads;
@@ -232,47 +257,50 @@ inline json normalize(const json& state, const std::string& printer_id, const st
             require(wire.is_object() && wire.contains("ace") && wire.contains("slot") && wire.contains("toolhead"),
                     "incomplete wiring entry");
             const int unit = index(wire.at("ace"), "wiring ACE");
-            const int h = index(wire.at("toolhead"), "wiring head");
-            index(wire.at("slot"), "wiring slot");
+            const int h    = index(wire.at("toolhead"), "wiring head");
+            const int slot = index(wire.at("slot"), "wiring slot");
             require(wired_heads.insert(h).second, "duplicate wiring head");
-            require(ace_to_head.count(unit) && ace_to_head.at(unit) == h, "wiring conflicts with head mapping");
+            require(multi ? (aces.count(unit) && ace_heads.count(h) && slot == h) : (ace_to_head.count(unit) && ace_to_head.at(unit) == h),
+                    "wiring conflicts with head mapping");
         }
     }
 
-    json result = {{"printer_id", printer_id}, {"host", host}, {"rows", json::array()}, {"warnings", json::array()}};
+    json  result   = {{"printer_id", printer_id}, {"host", host}, {"rows", json::array()}, {"warnings", json::array()}};
     json& warnings = result["warnings"];
     // ace_head is a legacy scalar. It must never override the validated plural mapping.
-    if (state.contains("ace_head") && (ace_heads.size() != 1 || state.at("ace_head") != *ace_heads.begin()))
+    if (!multi && state.contains("ace_head") && (ace_heads.size() != 1 || state.at("ace_head") != *ace_heads.begin()))
         warnings.push_back("Legacy ace_head disagrees; used validated ace_heads/head_feeder/head_ace mapping");
     for (const auto& entry : aces) {
-        const int unit = entry.first;
-        const json& ace = *entry.second;
+        const int   unit = entry.first;
+        const json& ace  = *entry.second;
         require(ace.contains("slots"), "ACE slots missing");
-        const auto slots = indexed(ace.at("slots"), "ACE slots");
+        const auto slots     = indexed(ace.at("slots"), "ACE slots");
         const bool connected = boolean(ace, "connected");
         for (int s = 0; s < 4; ++s) {
-            const std::string address = "ACE:" + std::to_string(unit) + ":" + std::to_string(s);
-            const std::string label = "ACE " + std::to_string(unit + 1) + " slot " + std::to_string(s + 1);
-            const json empty = json::object();
-            const json& slot = slots.count(s) ? *slots.at(s) : empty;
-            const std::string status = text(slot, "state").empty() ? text(slot, "status") : text(slot, "state");
-            const bool available = connected && status == "ready";
-            std::string source = text(slot, "source");
-            const bool identity_supplied = source == "rfid" || source == "override" || !text(slot, "ident_src").empty();
+            if (multi && !ace_heads.count(s))
+                continue; // Manual head cannot draw filament from an ACE lane.
+            const std::string address           = "ACE:" + std::to_string(unit) + ":" + std::to_string(s);
+            const std::string label             = "ACE " + std::to_string(unit + 1) + " slot " + std::to_string(s + 1);
+            const json        empty             = json::object();
+            const json&       slot              = slots.count(s) ? *slots.at(s) : empty;
+            const std::string status            = text(slot, "state").empty() ? text(slot, "status") : text(slot, "state");
+            const bool        available         = connected && status == "ready";
+            std::string       source            = text(slot, "source");
+            const bool        identity_supplied = source == "rfid" || source == "override" || !text(slot, "ident_src").empty();
             if (source.empty())
                 source = "unknown";
-            json normalized = row(printer_id, address, label, ace_to_head.at(unit), s, unit, s, slot,
-                                  available, identity_supplied, source, warnings);
+            json normalized = row(printer_id, address, label, multi ? s : ace_to_head.at(unit), multi ? unit : s, unit, s, slot, available,
+                                  identity_supplied, source, warnings);
             if (!slots.count(s))
                 warnings.push_back(label + ": missing from snapshot; retained as unavailable/unknown");
             if (overrides.contains(address)) {
                 if (available && normalized.at("material").get<std::string>().empty() && normalized.at("color").is_null()) {
-                    const json& supplied = overrides.at(address);
-                    normalized["label"] = label + " — " + text(supplied, "label") + " (user label; approximate color)";
-                    normalized["material"] = upper(text(supplied, "material"));
-                    normalized["color"] = color_text(text(supplied, "color"));
-                    normalized["source"] = "user";
-                    normalized["identified"] = false;
+                    const json& supplied        = overrides.at(address);
+                    normalized["label"]         = label + " — " + text(supplied, "label") + " (user label; approximate color)";
+                    normalized["material"]      = upper(text(supplied, "material"));
+                    normalized["color"]         = color_text(text(supplied, "color"));
+                    normalized["source"]        = "user";
+                    normalized["identified"]    = false;
                     normalized["user_override"] = true;
                 } else {
                     warnings.push_back(label + ": local label not applied to unavailable or partially/fully labelled replacement filament");

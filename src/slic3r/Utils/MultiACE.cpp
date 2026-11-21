@@ -143,11 +143,49 @@ bool MultiACE::snorca_assign_head_targets(const std::string &report_json, int ba
     using nlohmann::json;                                                                                     // SNORCA
     json r;                                                                                                   // SNORCA
     try { r = json::parse(report_json); } catch (...) { reason = "multiACE sent a plan the slicer cannot read."; return false; } // SNORCA
-    if (!r.is_object() || !r.value("head_mode", false)) {                                                     // SNORCA
-        reason = "multiACE is not in head mode on this printer; the automatic start is only built for head mode."; return false; } // SNORCA
-    const json cols = r.value("slicer_colors", json::array()), tgts = r.value("targets", json::array());     // SNORCA
-    if (!cols.is_array() || cols.empty()) { reason = "multiACE found no filament colours in the file."; return false; } // SNORCA
-    if (!tgts.is_array()) { reason = "multiACE sent no spool list."; return false; }                         // SNORCA
+    if (!r.is_object()) {
+        reason = "multiACE sent an invalid print plan.";
+        return false;
+    }
+    if (!r.value("head_mode", false)) {
+        // Classic multi reports live_slots, not head-mode targets. Each unit's
+        // slot N feeds nozzle N; its synthetic tool number is unit * 4 + N.
+        if (!r.contains("plans") || !r["plans"].is_object() || !r["plans"].contains("slicer") || !r.contains("live_slots") ||
+            !r["live_slots"].is_array()) {
+            reason = "multiACE did not provide a multi-mode loadout plan; check its preflight page.";
+            return false;
+        }
+        json          targets = json::array();
+        std::set<int> seen;
+        for (const auto& slot : r["live_slots"]) {
+            if (!slot.is_object() || !slot.contains("ace") || !slot["ace"].is_number_integer() || !slot.contains("slot") ||
+                !slot["slot"].is_number_integer() || slot["ace"] < 0 || slot["ace"] > 3 || slot["slot"] < 0 || slot["slot"] > 3) {
+                reason = "multiACE sent an invalid multi-mode spool address.";
+                return false;
+            }
+            const int unit = slot["ace"].get<int>(), lane = slot["slot"].get<int>();
+            const int tool = unit * 4 + lane;
+            if (!seen.insert(tool).second) {
+                reason = "multiACE sent a duplicate spool address.";
+                return false;
+            }
+            json target    = slot;
+            target["id"]   = std::to_string(tool);
+            target["kind"] = "ace";
+            target["head"] = lane;
+            targets.push_back(std::move(target));
+        }
+        r["targets"] = std::move(targets);
+    }
+    const json cols = r.value("slicer_colors", json::array()), tgts = r.value("targets", json::array()); // SNORCA
+    if (!cols.is_array() || cols.empty()) {
+        reason = "multiACE found no filament colours in the file.";
+        return false;
+    } // SNORCA
+    if (!tgts.is_array()) {
+        reason = "multiACE sent no spool list.";
+        return false;
+    } // SNORCA
     // Mixed nozzle sizes: a filament may only go to a head carrying the diameter it was sliced for (as the page). // SNORCA
     const bool mixed = r.value("forca", false) && r.value("nozzles_mixed", false);                           // SNORCA
     json hn = r.value("head_nozzles", json::object()); if (!hn.is_object() || hn.empty()) hn = r.value("nozzles", json::object()); // SNORCA
@@ -562,9 +600,25 @@ int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_f
     const std::string bed_choice = snorca_choice(up, "snorca_print_bed_calibration");                           // SNORCA
     const bool bed_mesh = bed_choice == "area" || bed_choice == "full";                                       // SNORCA
     const bool flow_cal = snorca_choice(up, "snorca_print_flow_calibration") == "1";                            // SNORCA
-    const json body = {{"token", token}, {"mode", "head"}, {"head_plan", "loadout"}, {"head_assignment", asn}, // SNORCA
+    json body = {{"token", token}, {"mode", "head"}, {"head_plan", "loadout"}, {"head_assignment", asn}, // SNORCA
                        {"head_copies", json::object()}, {"bed_mesh", bed_mesh}, {"camera", false}, {"flow_cal", flow_cal}}; // SNORCA
-    BOOST_LOG_TRIVIAL(warning) << "multiACE: print options bed=" << (bed_choice.empty() ? "(not asked)" : bed_choice) << " bed_mesh=" << bed_mesh << " flow_cal=" << flow_cal; // SNORCA
+    if (!rep.value("head_mode", false)) {
+        const std::string printer_mode = st.value("mode", std::string());
+        if (printer_mode != "multi" && printer_mode != "single") {
+            reason = "Printer mode and multiACE print plan disagree; sync the printer and try again.";
+            return 0;
+        }
+        json remap = json::object();
+        for (const auto& entry : asn)
+            remap[entry.first] = std::stoi(entry.second); // Validated synthetic tool 0..15 above.
+        body.erase("head_plan");
+        body.erase("head_assignment");
+        body.erase("head_copies");
+        body["mode"]  = "slicer";
+        body["remap"] = std::move(remap);
+    }
+    BOOST_LOG_TRIVIAL(warning) << "multiACE: print options bed=" << (bed_choice.empty() ? "(not asked)" : bed_choice)
+                               << " bed_mesh=" << bed_mesh << " flow_cal=" << flow_cal;                       // SNORCA
     std::string job_id; bool start_ok = false;                                                                // SNORCA
     auto sp = Http::post(make_url("multiace/api/preflight/print")); set_auth(sp);                             // SNORCA
     sp.header("Content-Type", "application/json").set_post_body(body.dump()).timeout_connect(5).timeout_max(120) // SNORCA
