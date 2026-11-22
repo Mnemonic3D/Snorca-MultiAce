@@ -406,14 +406,40 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 const auto* diameters=old_printer.option<ConfigOptionFloats>("nozzle_diameter");
                 if(!diameters||diameters->values.size()!=4)throw std::runtime_error("Select the four-toolhead Snapmaker U1 printer profile before syncing.");
                 // Filament sync must not rewrite the user's Toolheads/Unit settings.
+                // A retained palette row is a route. Its remembered swatch or preset cannot tell us a spool is loaded.
+                const auto& printer_feeds = inventory.at("rows");
+                size_t loaded_count = 0, ace_slot_count = 0;
+                for (const auto& feed : printer_feeds) {
+                    loaded_count += feed.at("available").get<bool>();
+                    ace_slot_count += !feed.at("ace_unit").is_null();
+                }
+                const auto plural=[](size_t n,const char* one,const char* many){return std::to_string(n)+" "+(n==1?one:many);};
+                const size_t feed_count = printer_feeds.size();
+                const bool only_ace_slots = ace_slot_count == feed_count;
+                const std::string loadout = std::to_string(loaded_count) + " loaded / " +
+                    plural(feed_count, only_ace_slots ? "slot" : "feed", only_ace_slots ? "slots" : "feeds");
+
+                const auto feed_tooltip = [](const auto& row) {
+                    const auto& own = row.at("ownership");
+                    return own.at("label").template get<std::string>() + " → nozzle " +
+                        std::to_string(row.at("nozzle").template get<int>() + 1);
+                };
+                const auto update_feed_tooltips = [self, &feed_tooltip](const auto& rows) {
+                    for (size_t i = 0; i < rows.size() && i < self->p->combos_filament.size(); ++i) {
+                        if (!rows[i].at("ownership").empty())
+                            self->p->combos_filament[i]->SetToolTip(wxString::FromUTF8(feed_tooltip(rows[i])));
+                    }
+                };
                 std::string inventory_details;
-                size_t detail_index=0;for(const auto& row:planned.at("rows")){++detail_index;const auto& own=row.at("ownership");if(own.empty())continue;
-                    inventory_details+=std::to_string(detail_index)+": "+own.value("label",std::string())+" → nozzle "+std::to_string(row.at("nozzle").get<int>()+1)+", slot "+std::to_string(row.at("mms_slot").get<int>()+1)+"\n";
+                size_t detail_index = 0;
+                for (const auto& row : planned.at("rows")) {
+                    ++detail_index;
+                    if (!row.at("ownership").empty())
+                        inventory_details += std::to_string(detail_index) + ": " + feed_tooltip(row) + "\n";
                 }
                 for(const auto& warning:planned.at("warnings"))inventory_details+="\n"+warning.get<std::string>();
-                // SNORCA: "Matches" only when the pool is exactly this printer's feeds; otherwise say what does not follow it.
-                const size_t hand_n=planned.at("hand_edited").size(),kept_n=planned.at("kept_not_on_printer").size(),printer_n=planned.at("printer_rows").get<size_t>(); // SNORCA
-                auto plural=[](size_t n,const char* one,const char* many){return std::to_string(n)+" "+(n==1?one:many);}; // SNORCA
+                // "Matches" is only accurate when the palette follows the current printer.
+                const size_t hand_n=planned.at("hand_edited").size(),kept_n=planned.at("kept_not_on_printer").size();
                 std::string result_label,result_note; // SNORCA
                 if(hand_n){result_label=plural(hand_n,"filament","filaments")+" changed by hand"; // SNORCA
                     result_note=plural(hand_n,"filament was","filaments were")+" changed by hand and "+(hand_n==1?"is":"are")+" not following the printer. Press the sync button to match the printer."; // SNORCA
@@ -434,7 +460,8 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     for(const auto& k:planned.at("kept_not_on_printer"))note+="\nUsed by objects, not on "+preset_name+": "+k.get<std::string>(); // SNORCA
                     status("Filament move undone; press sync to match "+preset_name,note);return;} // SNORCA
                 if(planned.at("rows")==before.at("rows")){ // SNORCA
-                    if(result_label.empty())result_label="Matches "+preset_name+" ("+plural(printer_n,"filament","filaments")+")"; // SNORCA
+                    update_feed_tooltips(planned.at("rows"));
+                    if(result_label.empty())result_label="Matches "+preset_name+" ("+loadout+")";
                     status(result_label,(result_note.empty()?std::string():result_note+"\n")+inventory_details);return;} // SNORCA
                 const DynamicPrintConfig old_config=bundle->project_config;
                 const auto old_presets=bundle->filament_presets;const auto old_multicolor=bundle->ams_multi_color_filment;
@@ -476,14 +503,11 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     bundle->export_selections(*wxGetApp().app_config);
                     self->p->snorca_sync_undo_config.reset(new DynamicPrintConfig(old_config));self->p->snorca_sync_undo_printer.reset(new DynamicPrintConfig(old_printer));self->p->snorca_sync_undo_presets=old_presets;self->p->snorca_sync_undo_multicolor=old_multicolor;
                     self->reset_snorca_filament_sync_baseline();self->p->snorca_sync_undo_after=snorca_palette_state().dump();self->p->snorca_sync_last_palette=self->p->snorca_sync_undo_after;self->p->snorca_sync_undo->Enable(true); // SNORCA
-                    std::string labels;
-                    for(size_t i=0;i<rows.size();++i){const auto& own=rows[i].at("ownership");if(own.empty())continue;
-                        std::string label=own.value("label",std::string());labels+=std::to_string(i+1)+": "+label+" → nozzle "+std::to_string(rows[i].at("nozzle").get<int>()+1)+", slot "+std::to_string(rows[i].at("mms_slot").get<int>()+1)+"\n";
-                        if(i<self->p->combos_filament.size())self->p->combos_filament[i]->SetToolTip(wxString::FromUTF8(label));}
-                    self->p->snorca_sync_status->SetToolTip(wxString::FromUTF8(labels));
-                    // SNORCA: short result line; details (what was removed, moved or kept, notes, routes) in the tooltip and the log.
-                    std::string summary=result_label.empty()?"Synced "+plural(printer_n,"filament","filaments")+" from "+preset_name:result_label; // SNORCA
-                    std::string tip=(result_note.empty()?std::string():result_note+"\n")+"Synced "+plural(printer_n,"filament","filaments")+" from "+address+"."; // SNORCA
+                    update_feed_tooltips(rows);
+                    // The tooltip keeps the physical slot and its destination nozzle separate.
+                    std::string summary = result_label.empty() ? "Synced " + preset_name + " (" + loadout + ")" : result_label;
+                    std::string tip = (result_note.empty() ? std::string() : result_note + "\n") + loadout + " at " + address +
+                        ". Loaded counts feeds the printer reports as ready.";
                     if(!mixed.dropped.empty()){summary+="; removed "+plural(mixed.dropped.size(),"mixed filament","mixed filaments"); // SNORCA (2026-11-14)
                         tip+="\n"+plural(mixed.dropped.size(),"mixed filament was","mixed filaments were")+" removed because a filament "+(mixed.dropped.size()==1?"it":"they")+" mixed is no longer in the list; objects that used "+(mixed.dropped.size()==1?"it":"them")+" now use their default filament:"; // SNORCA
                         for(const auto& d:mixed.dropped)tip+="\n  "+d;} // SNORCA
