@@ -1,6 +1,8 @@
 #include "slic3r/Utils/SnorcaFilamentSync.hpp"
 #include <cassert>
 #include <iostream>
+#include <locale>
+#include <sstream>
 #include <cmath>
 #include <cstdio>
 using nlohmann::json;
@@ -98,6 +100,38 @@ int main()
     assert(assign(hp.dump(), 1, asn, reason, summary, nullptr));
     assert(asn.at("0") == "slot-0-1");
     assert(request(hp, head, asn, reason)["head_assignment"]["0"] == "slot-0-1");
+    // Seven configured spools, but this plate consumed only filament 1.
+    const auto only_head_1 = snorca_used_filaments("152.25, 0, 0, 0, 0, 0, 0");
+    assert(only_head_1 == std::set<int>{0});
+    assert((snorca_used_filaments("0, 15.5, 0, 1.25") == std::set<int>{1, 3}));
+    assert(snorca_used_filaments("10, broken").empty());
+    assert(snorca_used_filaments("0, 0").empty());
+    json single_head = {{"head_mode", true}, {"slicer_colors", json::array()}, {"targets", json::array()}};
+    for (int t = 0; t < 7; ++t) {
+        const std::string material = t < 3 ? "PLA" : "ASA";
+        const std::string color    = t < 2 ? "#000000" : "#FF0000";
+        single_head["slicer_colors"].push_back({{"t", t}, {"material", material}, {"hex", color}});
+        single_head["targets"].push_back({{"id", std::to_string(t)},
+                                          {"kind", t < 3 ? "pin" : "ace"},
+                                          {"head", std::min(t, 3)},
+                                          {"ace", 0},
+                                          {"slot", std::max(t - 3, 0)},
+                                          {"material", material},
+                                          {"color", color}});
+    }
+    std::vector<std::vector<std::string>> plan;
+    asn.clear();
+    assert(assign(single_head.dump(), 1, asn, reason, summary, &plan));
+    assert(asn.size() == 7 && plan.size() == 7);
+    asn.clear();
+    assert(assign(single_head.dump(), 1, asn, reason, summary, &plan, only_head_1));
+    assert(asn.size() == 1 && asn.at("0") == "0" && plan.size() == 1 && plan[0][3] == "head 1 feeder");
+    assert(request(single_head, head, asn, reason)["head_assignment"].size() == 1);
+    asn.clear();
+    single_head["slicer_colors"].erase(0);
+    assert(!assign(single_head.dump(), 1, asn, reason, summary, &plan, only_head_1));
+    assert(asn.empty());
+    std::cout << "PASS: Head 1-only confirmation and print assignment, sparse IDs, malformed usage, missing active filament\n";
     std::cout << "PASS: multi routing, legacy single, stale head metadata, invalid routing, manual heads, disconnected unit, head "
                  "regression, print remap, mismatch rejection, duplicate slot rejection, material/nozzle checks, head print regression\n";
 }

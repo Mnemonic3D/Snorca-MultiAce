@@ -16,6 +16,7 @@
 // file that already carries multiACE's processed markers, so never send G-code
 // that has been through multiace post_process_virtual_toolheads.py.
 
+#include <set>
 #include <string>
 #include <map>   // SNORCA
 #include <vector> // SNORCA
@@ -97,7 +98,8 @@ public:
     static bool snorca_assign_head_targets(const std::string &report_json, int index_base,   // SNORCA
                                          std::map<std::string, std::string> &assignment,   // SNORCA
                                          std::string &reason, std::string &summary,        // SNORCA
-                                         std::vector<std::vector<std::string>> *plan = nullptr); // SNORCA
+                                         std::vector<std::vector<std::string>> *plan = nullptr,
+                                         const std::set<int>& used_filaments = {}); // SNORCA
 private:                                                                                  // SNORCA
     int snorca_auto_start(const PrintHostUpload &upload_data, ProgressFn progress_fn) const; // SNORCA
     mutable SnorcaOutcome m_snorca_outcome;                                                   // SNORCA
