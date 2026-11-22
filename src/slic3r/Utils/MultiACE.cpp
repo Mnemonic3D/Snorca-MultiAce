@@ -825,19 +825,23 @@ MultiACE::TopologyReport MultiACE::fetch_topology(std::string host)
         // Which heads a unit drives. ace_heads is the list; the legacy single-ACE field
         // ace_head is the same fallback head_maps() itself applies. head_ace is identity-
         // padded outside head mode and deliberately never read here.
-        std::vector<int> ace_heads;
-        if (ctx.contains("ace_heads") && ctx["ace_heads"].is_array())
-            for (const auto &v : ctx["ace_heads"])
-                ace_heads.push_back(v.get<int>());
-        if (ace_heads.empty() && r.mode == "head" && ctx.contains("ace_head"))
-            ace_heads.push_back(ctx["ace_head"].get<int>());
-        int head_n = 4;
-        for (int h : ace_heads)
-            head_n = std::max(head_n, h + 1);
-        r.ace_driven_heads.assign(size_t(head_n), false);
-        for (int h : ace_heads)
-            if (h >= 0)
-                r.ace_driven_heads[size_t(h)] = true;
+        r.ace_driven_heads.assign(4, false);
+        if (r.mode == "head") {
+            auto mark_head = [&](const nlohmann::json& value) {
+                if (!value.is_number_integer() || value < 0 || value > 3)
+                    throw std::invalid_argument("invalid ACE-driven head");
+                r.ace_driven_heads[value.get<int>()] = true;
+            };
+            if (ctx.contains("ace_heads")) {
+                const auto& heads = ctx.at("ace_heads");
+                if (!heads.is_array() || heads.size() > 4)
+                    throw std::invalid_argument("invalid ACE-driven head list");
+                for (const auto& head : heads)
+                    mark_head(head);
+            } else if (ctx.contains("ace_head")) {
+                mark_head(ctx.at("ace_head"));
+            }
+        }
 
         // Supply, head-indexed, read off Klipper's extruder objects. String keys.
         if (ctx.contains("head_nozzles") && ctx["head_nozzles"].is_object())
@@ -850,14 +854,18 @@ MultiACE::TopologyReport MultiACE::fetch_topology(std::string host)
                 r.head_nozzles[size_t(idx)] = el.value().get<double>();
             }
 
-        // Units seen. live_slots drops empty and non-identified slots, so this is a
-        // LOWER BOUND on the connected count - the caller's dialog says so.
-        std::set<int> units;
-        if (j.contains("live_slots") && j["live_slots"].is_array())
-            for (const auto &s : j["live_slots"])
-                if (s.contains("ace") && s["ace"].is_number())
-                    units.insert(s["ace"].get<int>());
-        r.units_seen = int(units.size());
+        // Unlike live_slots, connected_aces includes empty and unlabelled units.
+        if (ctx.contains("connected_aces") && !ctx.at("connected_aces").is_null()) {
+            const auto& connected = ctx.at("connected_aces");
+            if (!connected.is_array() || connected.size() > 4)
+                throw std::invalid_argument("invalid connected unit list");
+            std::set<int> units;
+            for (const auto& unit : connected) {
+                if (!unit.is_number_integer() || unit < 0 || unit > 3 || !units.insert(unit.get<int>()).second)
+                    throw std::invalid_argument("invalid connected unit index");
+            }
+            r.units_seen = int(units.size());
+        }
 
         r.ok = true;
     } catch (const std::exception &e) {

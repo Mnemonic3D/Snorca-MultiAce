@@ -1,4 +1,4 @@
-#include "slic3r/Utils/SnorcaFilamentSync.hpp"
+#include "slic3r/Utils/SnorcaFilamentPlan.hpp"
 #include <cassert>
 #include <iostream>
 #include <locale>
@@ -67,6 +67,80 @@ int main()
     assert(hr[0]["nozzle"] == 1);
     assert(hr[4]["nozzle"] == 3);
     assert(hr[7]["mms_slot"] == 3);
+    // Firmware preserves sparse MMU places across unplugging, removal and mixed driver setups.
+    auto one_unit = st;
+    one_unit["aces"].erase(1);
+    assert(normalize(one_unit, "TEST", "192.168.4.30")["rows"].size() == 4);
+    auto four_units = st;
+    for (int a = 2; a < 4; ++a) {
+        auto unit = st["aces"][0];
+        unit["idx"] = a;
+        unit["kind"] = a == 2 ? "ace2k" : "cfs_nano";
+        four_units["aces"].push_back(unit);
+        const auto all = normalize(four_units, "TEST", "192.168.4.30")["rows"];
+        assert(all.size() == 4 * (a + 1));
+        assert(all.back()["key"] == "TEST|ACE:" + std::to_string(a) + ":3");
+        assert(all.back()["nozzle"] == 3 && all.back()["mms_slot"] == a);
+    }
+    auto sparse = four_units;
+    sparse["aces"][2]["connected"] = false;
+    sparse["aces"][2]["unit_present"] = false;
+    sparse["aces"][2]["unit_key"] = "";
+    sparse["aces"][3]["unit_present"] = false;
+    sparse["aces"][3]["unit_key"] = "saved-cfs";
+    const auto sparse_rows = normalize(sparse, "TEST", "192.168.4.30")["rows"];
+    assert(sparse_rows.size() == 12);
+    assert(sparse_rows.back()["key"] == "TEST|ACE:3:3");
+    assert(sparse_rows.back()["available"] == false);
+    auto spare = head;
+    spare["aces"] = four_units["aces"];
+    assert(normalize(spare, "TEST", "192.168.4.30")["rows"] == hr);
+    spare["head_ace"]["1"] = 3;
+    spare["head_ace"]["3"] = 2;
+    const auto swapped = normalize(spare, "TEST", "192.168.4.30")["rows"];
+    assert(swapped.size() == 10);
+    assert(swapped[0]["key"] == "TEST|ACE:2:0" && swapped[0]["nozzle"] == 3);
+    assert(swapped[4]["key"] == "TEST|ACE:3:0" && swapped[4]["nozzle"] == 1);
+    auto stock = st;
+    stock["mode"] = "normal";
+    rejected = false;
+    try {
+        normalize(stock, "TEST", "192.168.4.30");
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    assert(rejected);
+    manual["toolheads"][2]["filament_at_extruder"] = false;
+    assert(normalize(manual, "TEST", "192.168.4.30")["rows"].back()["available"] == false);
+    for (int h = 0; h < 4; ++h)
+        manual["toolheads"][h] = {{"idx", h}, {"manual", true}, {"ace", nullptr}, {"slot", nullptr}};
+    const auto all_manual = normalize(manual, "TEST", "192.168.4.30")["rows"];
+    assert(all_manual.size() == 4 && all_manual.back()["key"] == "TEST|EXTERNAL:3");
+
+    // An empty lane can keep a saved swatch while a different lane holds a real spool.
+    auto partly_loaded = st;
+    partly_loaded["aces"][0]["slots"][0]["state"] = "empty";
+    partly_loaded["aces"][0]["slots"][0]["color"] = "#008000";
+    partly_loaded["aces"][1]["slots"][0]["color"] = "#0000FF";
+    for (auto& unit : partly_loaded["aces"])
+        for (int slot = 1; slot < 4; ++slot)
+            unit["slots"][slot]["state"] = "empty";
+    const json project = {{"rows", {{{"preset", "Generic PETG"}, {"color", "#008000"}}}}, {"used", {0}}};
+    const json presets = {{{"name", "Generic PETG"}, {"material", "PETG"}, {"generic", true}}};
+    for (bool manual_sync : {false, true}) {
+        auto plan = Slic3r::SnorcaFilamentSync::plan_exact(project, normalize(partly_loaded, "TEST", "192.168.4.30"), presets,
+                                                          manual_sync, 64);
+        assert(plan["moved"].size() == 1 && plan["remap"][0] == 1);
+    }
+    partly_loaded["aces"][0]["slots"][0]["material"] = "UNSUPPORTED";
+    auto plan_with_stale_material = Slic3r::SnorcaFilamentSync::plan_exact(project, normalize(partly_loaded, "TEST", "192.168.4.30"),
+                                                                           presets, false, 64);
+    assert(plan_with_stale_material["remap"][0] == 1);
+    partly_loaded["aces"][1]["connected"] = false;
+    auto no_target = Slic3r::SnorcaFilamentSync::plan_exact(project, normalize(partly_loaded, "TEST", "192.168.4.30"), presets, true, 64);
+    assert(no_target["moved"].empty() && no_target["kept_not_on_printer"].size() == 1);
+    assert(no_target["rows"].back() == project["rows"][0]);
+    std::cout << "PASS: sparse places, mixed drivers, Head mode spare MMUs, stock mode guard, manual sensor and remap occupancy\n";
     json                               report = {{"plans", {{"slicer", json::object()}}},
                                                  {"slicer_colors", {{{"t", 0}, {"material", "PETG"}, {"hex", "#008000"}}}},
                                                  {"live_slots", {{{"ace", 1}, {"slot", 2}, {"material", "PETG"}, {"color", "#008000"}}}}};

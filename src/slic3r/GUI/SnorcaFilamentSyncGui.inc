@@ -445,7 +445,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     result_note=plural(hand_n,"filament was","filaments were")+" changed by hand and "+(hand_n==1?"is":"are")+" not following the printer. Press the sync button to match the printer."; // SNORCA
                     for(const auto& h:planned.at("hand_edited"))result_note+="\n  "+h.get<std::string>();} // SNORCA
                 if(kept_n){if(result_label.empty())result_label=plural(kept_n,"used filament","used filaments")+" not on "+preset_name;else result_label=plural(hand_n+kept_n,"filament","filaments")+" not following "+preset_name; // SNORCA
-                    result_note+=std::string(result_note.empty()?"":"\n")+plural(kept_n,"filament is","filaments are")+" used by objects but not loaded on "+preset_name+"; kept at the end of the list. Press the sync button to move those objects to the closest printer filament."; // SNORCA
+                    result_note+=std::string(result_note.empty()?"":"\n")+plural(kept_n,"filament is","filaments are")+" used by objects but not loaded on "+preset_name+"; kept at the end of the list. With a spool loaded, press sync to move those objects to the closest available filament."; // SNORCA
                     for(const auto& k:planned.at("kept_not_on_printer"))result_note+="\n  "+k.get<std::string>();} // SNORCA
                 // SNORCA (2026-11-13): Auto moved objects off rows the printer does not have; say what moved, in one short line.
                 const size_t moved_n=planned.at("moved").size(); // SNORCA

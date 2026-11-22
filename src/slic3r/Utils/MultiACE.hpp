@@ -67,9 +67,7 @@ public:
         std::string error;                // network / HTTP / parse detail for the dialog
         std::string mode;                 // "normal" | "multi" | "head" ("single" is
                                           // mapped to multi, matching ace.py's rewrite)
-        int         units_seen = 0;       // distinct units in live_slots. LOWER BOUND: a
-                                          // unit with no rfid/override-identified spool
-                                          // is invisible to this endpoint.
+        int         units_seen = -1;      // connected MMUs, or unknown on older firmware
         std::vector<bool>   ace_driven_heads; // head-indexed; head mode only
         std::vector<double> head_nozzles;     // head-indexed supply diameters; may be empty
     };

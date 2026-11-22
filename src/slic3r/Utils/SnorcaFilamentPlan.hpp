@@ -173,16 +173,21 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         for(size_t i=0;i<old.size();++i){const J own=old[i].value("ownership",J::object());                             // SNORCA
             if(remap[i]<0&&own.value("key",std::string())==key&&own.value("printer_id",std::string())==inventory.at("printer_id")){at=int(i);break;}} // SNORCA
         const J prev=at>=0?old[at]:J::object(); const J own=prev.value("ownership",J::object());                       // SNORCA
-        const std::string material=feed.value("material",std::string()), old_preset=prev.value("preset",std::string()); // SNORCA
+        const bool available = feed.at("available").get<bool>();
+        const std::string material = available ? feed.value("material", std::string()) : std::string();
+        const std::string old_preset = prev.value("preset", std::string()); // SNORCA
         std::string selected;                                                                                           // SNORCA
         for(const auto& p:compatible_presets)if(p.at("name")==old_preset&&p.at("material")==material)selected=old_preset; // SNORCA
         if(selected.empty()&&!material.empty())for(const auto& p:compatible_presets)if(p.at("material")==material){selected=p.at("name");if(p.value("generic",false))break;} // SNORCA
         if(selected.empty()){                                                                                           // SNORCA
             if(!material.empty())throw std::invalid_argument("No compatible local "+material+" filament preset. Previous palette retained."); // SNORCA
             selected=!old_preset.empty()?old_preset:(compatible_presets.empty()?std::string():compatible_presets[0].at("name").get<std::string>()); // SNORCA
-            warnings.push_back(feed.at("label").get<std::string>()+": material unidentified; preset is only a placeholder."); } // SNORCA
+            if (available)
+                warnings.push_back(feed.at("label").get<std::string>()+": material unidentified; preset is only a placeholder.");
+        } // SNORCA
         if(selected.empty())throw std::invalid_argument("No compatible local filament presets are available.");        // SNORCA
-        const std::string color=feed.at("color").is_string()?feed.at("color").get<std::string>():prev.value("color",std::string("#808080")); // SNORCA
+        const std::string color = available && feed.at("color").is_string() ? feed.at("color").get<std::string>()
+                                                                          : prev.value("color", std::string("#808080")); // SNORCA
         J row={{"preset",selected},{"color",color},{"nozzle",feed.at("nozzle")},{"mms_slot",feed.at("mms_slot")}};    // SNORCA
         J ownership={{"key",key},{"printer_id",inventory.at("printer_id")},{"host",inventory.at("host")},              // SNORCA
             {"label",feed.at("label")},{"material",material},{"source",feed.at("source")},                              // SNORCA
@@ -219,9 +224,17 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         int a[3],b[3]; const bool ca=SnorcaColour::parse(old[i].value("color",std::string()),a);                          // SNORCA
         int best=-1; double bd=1e18; bool same_material=false;                                                          // SNORCA
         for(int pass=0;pass<2&&best<0;++pass)for(size_t k=0;k<printer_rows;++k){                                        // SNORCA
+            if (!rows[k].at("ownership").at("available").get<bool>())
+                continue;
             if(pass==0&&(m.empty()||rows[k].at("ownership").value("material",std::string())!=m))continue;              // SNORCA
             const double d=ca&&SnorcaColour::parse(rows[k].value("color",std::string()),b)?SnorcaColour::delta_e(a,b):1e9; // SNORCA
             if(d<bd){bd=d;best=int(k);same_material=pass==0;}}                                                          // SNORCA
+        if (best < 0) {
+            remap[i] = int(rows.size());
+            rows.push_back(old[i]);
+            kept.push_back(what);
+            continue;
+        }
         remap[i]=best; removed.push_back(what);                                                                         // SNORCA
         // SNORCA (2026-11-13): plain names for the status line, e.g. "8 Black PLA -> 2 Black PLA".                       SNORCA
         auto plain=[](const std::string& hex,const std::string& mat){const std::string n=SnorcaColour::name(hex);         // SNORCA

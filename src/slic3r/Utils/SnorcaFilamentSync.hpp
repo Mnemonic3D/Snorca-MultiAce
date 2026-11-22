@@ -229,7 +229,6 @@ inline json normalize(const json& state, const std::string& printer_id, const st
                 require(!head.contains("slot") || head.at("slot").is_null(), "external head unexpectedly names an ACE slot");
             }
         }
-        require(ace_to_head.size() == aces.size(), "unmapped ACE unit makes routing ambiguous");
     } else {
         // Multi topology is transposed: slot N on every unit feeds nozzle N.
         // head_ace/head_feeder describe HEAD mode and may contain stale defaults.
@@ -273,9 +272,16 @@ inline json normalize(const json& state, const std::string& printer_id, const st
     for (const auto& entry : aces) {
         const int   unit = entry.first;
         const json& ace  = *entry.second;
+        // Head mode may leave a connected unit unused. In either mode,
+        // preserve a saved offline unit's place, but do not create slots for a vacant place.
+        if ((!multi && !ace_to_head.count(unit)) || boolean(ace, "unit_removed"))
+            continue;
+        const bool present = boolean(ace, "unit_present", true);
+        if (!present && text(ace, "unit_key").empty())
+            continue;
         require(ace.contains("slots"), "ACE slots missing");
         const auto slots     = indexed(ace.at("slots"), "ACE slots");
-        const bool connected = boolean(ace, "connected");
+        const bool connected = present && boolean(ace, "connected");
         for (int s = 0; s < 4; ++s) {
             if (multi && !ace_heads.count(s))
                 continue; // Manual head cannot draw filament from an ACE lane.
@@ -314,7 +320,9 @@ inline json normalize(const json& state, const std::string& printer_id, const st
         if (ace_heads.count(h))
             continue; // Its current ACE spool already appears above; never duplicate it as external.
         const json& head = *entry.second;
-        const bool available = boolean(head, "module_exist") && boolean(head, "filament_detected") && !boolean(head, "load_failed");
+        const bool detected = boolean(head, "filament_detected");
+        const bool has_filament = multi && boolean(head, "manual") ? boolean(head, "filament_at_extruder", detected) : detected;
+        const bool available = boolean(head, "module_exist") && has_filament && !boolean(head, "load_failed");
         // In multiACE, head_source_known means known ACE routing. It is always
         // false for external feeders, whose identity comes from print_task_config.
         result["rows"].push_back(row(printer_id, "EXTERNAL:" + std::to_string(h), "External nozzle " + std::to_string(h + 1),
