@@ -1309,8 +1309,6 @@ struct DynamicFilamentList : DynamicList
 
     void apply_on(Choice *c) override
     {
-        if (items.empty())
-            update(true);
         auto cb = dynamic_cast<ComboBox *>(c->window);
         auto n  = cb->GetSelection();
         cb->Clear();
@@ -1332,24 +1330,34 @@ struct DynamicFilamentList : DynamicList
         long n = 0;
         return (value.ToLong(&n) && n <= items.size()) ? int(n) : -1;
     }
-    void update(bool force = false)
+    void refresh_choice(Choice *choice) override
     {
-        items.clear();
-        if (!force && m_choices.empty())
+        rebuild_items();
+        apply_on(choice);
+    }
+
+    void update()
+    {
+        if (m_choices.empty())
             return;
-        auto icons = get_extruder_color_icons(true);
-        auto presets = wxGetApp().preset_bundle->filament_presets;
-        for (int i = 0; i < presets.size(); ++i) {
-            wxString str;
-            std::string type;
-            // FOS: guard against nullptr during preset selection state transition
-auto* filament_preset = wxGetApp().preset_bundle->filaments.find_preset(presets[i]);
-if (filament_preset)
-    filament_preset->get_filament_type(type);
-            str << type;
-            items.push_back({str, icons[i]});
-        }
+        rebuild_items();
         DynamicList::update();
+    }
+
+private:
+    void rebuild_items()
+    {
+        const auto icons = get_extruder_color_icons(true);
+        auto &bundle = *wxGetApp().preset_bundle;
+        const auto &presets = bundle.filament_presets;
+
+        items.clear();
+        for (size_t i = 0; i < std::min(presets.size(), icons.size()); ++i) {
+            std::string type;
+            if (auto *preset = bundle.filaments.find_preset(presets[i]))
+                preset->get_filament_type(type);
+            items.emplace_back(wxString::FromUTF8(type), icons[i]);
+        }
     }
 };
 
@@ -1357,8 +1365,6 @@ struct DynamicFilamentList1Based : DynamicFilamentList
 {
     void apply_on(Choice *c) override
     {
-        if (items.empty())
-            update(true);
         auto cb = dynamic_cast<ComboBox *>(c->window);
         auto n  = cb->GetSelection();
         cb->Clear();
@@ -1381,24 +1387,6 @@ struct DynamicFilamentList1Based : DynamicFilamentList
             return -1;
         --n;
         return (n >= 0 && n <= items.size()) ? int(n) : -1;
-    }
-    void update(bool force = false)
-    {
-        items.clear();
-        if (!force && m_choices.empty())
-            return;
-        auto icons = get_extruder_color_icons(true);
-        auto presets = wxGetApp().preset_bundle->filament_presets;
-        for (int i = 0; i < presets.size(); ++i) {
-            wxString str;
-            std::string type;
-            // FOS: guard against nullptr during preset selection state transition
-auto* fp = wxGetApp().preset_bundle->filaments.find_preset(presets[i]);
-if (fp) fp->get_filament_type(type);
-            str << type;
-            items.push_back({str, icons[i]});
-        }
-        DynamicList::update();
     }
 
 };
@@ -1979,8 +1967,6 @@ struct DynamicFilamentListGated : DynamicFilamentList
 {
     void apply_on(Choice *c) override
     {
-        if (items.empty())
-            update(true);
         auto cb = dynamic_cast<ComboBox *>(c->window);
         auto n  = cb->GetSelection();
         cb->Clear();
@@ -24659,6 +24645,7 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
     bool update_scheduled = false;
     bool bed_shape_changed = false;
     bool print_sequence_changed = false;
+    bool filament_swatches_changed = false;
     t_config_option_keys diff_keys = p->config->diff(config);
     for (auto opt_key : diff_keys) {
         if (opt_key == "filament_colour") {
@@ -24672,11 +24659,12 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
             });
 
             if (update_filament_colors_in_full_config()) {
-                p->sidebar->obj_list()->update_filament_colors();
-                p->sidebar->update_dynamic_filament_list();
+                filament_swatches_changed = true;
                 continue;
             }
         }
+        if (opt_key == "filament_multi_colors" || opt_key == "filament_colour_mode")
+            filament_swatches_changed = true;
         if (opt_key == "material_colour") {
             update_scheduled = true; // update should be scheduled (for update 3DScene)
         }
@@ -24739,6 +24727,11 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
             if (opt_key == "wall_filament")
                 wxGetApp().obj_list()->update_object_filament_column_display();
         }
+    }
+
+    if (filament_swatches_changed) {
+        p->sidebar->obj_list()->update_filament_colors();
+        p->sidebar->update_dynamic_filament_list();
     }
 
     if (bed_shape_changed)
