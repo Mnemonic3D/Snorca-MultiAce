@@ -11129,16 +11129,23 @@ void GLCanvas3D::_update_pla_petg_mix_warning()
             }
             PartPlate *cur_plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
             if (cur_plate != nullptr) {
-                std::vector<int> used_filaments = cur_plate->get_extruders(true);
-                for (int filament_idx : used_filaments) {
-                    int filament_id = filament_idx - 1;
-                    if (filament_id >= 0 && filament_id < static_cast<int>(filament_types.size())) {
-                        const std::string &filament_type = filament_types[filament_id];
-                        if (filament_type == "PLA")
-                            has_pla = true;
-                        else if (filament_type == "PETG")
-                            has_petg = true;
+                const auto record_filament_type = [&](size_t slot) {
+                    if (slot < filament_types.size()) {
+                        has_pla |= filament_types[slot] == "PLA";
+                        has_petg |= filament_types[slot] == "PETG";
                     }
+                };
+                const GCodeProcessorResult *slice = cur_plate->get_slice_result();
+                if (cur_plate->is_slice_result_valid() && slice != nullptr) {
+                    // The estimate can include defaults that never extrude. A completed
+                    // slice includes actual use by the model, supports and purge paths.
+                    for (const auto &[slot, volume] : slice->print_statistics.total_volumes_per_extruder)
+                        if (volume > 0.0)
+                            record_filament_type(slot);
+                } else {
+                    for (int filament : cur_plate->get_extruders(true))
+                        if (filament > 0)
+                            record_filament_type(static_cast<size_t>(filament - 1));
                 }
             }
         }
