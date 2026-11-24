@@ -4677,8 +4677,10 @@ void PresetBundle::update_compatible(PresetSelectCompatibleType select_other_pri
                     }
             }
         }
-        // FOS: always ensure filament presets match slot nozzle diameter for mixed nozzle setups
-        {
+        // This fallback treats filament index as nozzle index. MultiACE has
+        // several filament rows per nozzle and uses its own route mapping.
+        const ConfigOption *mms = printer_preset.config.option("mms_system");
+        if (mms == nullptr || mms->getInt() != int(MultiMaterialSupply::mmsMultiACE)) {
             const auto* nd_opt = printer_preset.config.option<ConfigOptionFloats>("nozzle_diameter");
             if (nd_opt && nd_opt->values.size() > 1) {
                 const std::string prefered_filament_profile = prefered_filament_profiles.empty() ? std::string() : prefered_filament_profiles.front();

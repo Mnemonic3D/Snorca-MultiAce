@@ -10027,8 +10027,11 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                 boost::icontains(printer_model_opt->value, "Snapmaker") &&
                 boost::icontains(printer_model_opt->value, "U1");
 
-            if (p->m_fos_mixed_nozzle_mode) {
-                // Mixed mode: update individual nozzle
+            const bool multiace = snorca_upstream_sync_blocked();
+            if (p->m_fos_mixed_nozzle_mode || multiace) {
+                // Keep the selected multiACE printer and its palette when changing diameter.
+                const bool all_nozzles = !p->m_fos_mixed_nozzle_mode;
+                const std::string edited_name = wxGetApp().preset_bundle->printers.get_edited_preset().name;
                 // FOS: update swatch and bar colors
                 wxColour bg;
                 if      (dstr == "0.2") bg = wxColour(0xFF, 0xFF, 0xFF);
@@ -10042,23 +10045,27 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                     bar->SetBackgroundColour(bg);
                     bar->Refresh();
                 }
-                wxGetApp().CallAfter([this, i, dval, dstr, ow_ext_idx]() {
-                    auto* nd2 = wxGetApp().preset_bundle->printers.get_edited_preset()
-                        .config.option<ConfigOptionFloats>("nozzle_diameter");
-                    if (nd2 && i < nd2->values.size())
+                wxGetApp().CallAfter([this, i, dval, ow_ext_idx, multiace, all_nozzles, edited_name]() {
+                    auto& bundle = *wxGetApp().preset_bundle;
+                    auto& printer = bundle.printers.get_edited_preset();
+                    auto* nd2 = printer.config.option<ConfigOptionFloats>("nozzle_diameter");
+                    if (printer.name != edited_name || nd2 == nullptr || i >= nd2->values.size())
+                        return;
+                    if (all_nozzles)
+                        std::fill(nd2->values.begin(), nd2->values.end(), dval);
+                    else
                         nd2->values[i] = dval;
                     wxGetApp().get_tab(Preset::TYPE_PRINTER)->update();
                     // FOS 8.6.2: inherits follows the OUTER WALL nozzle alone - it selects the
                     // parent whose process presets apply, which is not a per-nozzle question.
-                    if ((int)i == ow_ext_idx) {
-                        auto& pp = wxGetApp().preset_bundle->printers.get_edited_preset();
-                        if (!pp.is_system) {
+                    if (all_nozzles || (int)i == ow_ext_idx) {
+                        if (!printer.is_system) {
                             std::ostringstream ss;
                             ss << std::fixed << std::setprecision(1) << dval;
                             std::string new_inherits = "Snapmaker U1 (" + ss.str() + " nozzle)";
-                            pp.inherits() = new_inherits;
-                            const_cast<Preset&>(wxGetApp().preset_bundle->printers
-                                .get_selected_preset()).inherits() = new_inherits;
+                            printer.inherits() = new_inherits;
+                            if (!multiace)
+                                const_cast<Preset&>(bundle.printers.get_selected_preset()).inherits() = new_inherits;
                         }
                     }
                     // FOS 8.6.2: recompute compatibility for EVERY nozzle, not only the outer
@@ -10068,7 +10075,8 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                     // drops them on its next rebuild - which the filament map dialog forces.
                     // It must also run AFTER nd2 is written; the old synchronous copy that
                     // followed this lambda ran before it and always read the stale array.
-                    wxGetApp().preset_bundle->update_compatible(PresetSelectCompatibleType::Always);
+                    bundle.update_compatible(PresetSelectCompatibleType::Always,
+                        multiace ? PresetSelectCompatibleType::Never : PresetSelectCompatibleType::Always);
                     wxGetApp().CallAfter([]() {
                         if (wxGetApp().plater()) {
                             wxGetApp().plater()->sidebar().update_presets(Preset::TYPE_PRINT);
@@ -10258,6 +10266,7 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
 
     // FOS: refresh PRP when switching PTP
     if (switch_machine) {
+        const bool multiace = snorca_upstream_sync_blocked();
         // FOS 8.5.1: nozzle 1 PRP / printer base follows nozzle 1 OWN diameter (index 0), NOT the
         // outer-wall nozzle. OW is the MAPS layer-height spine (a separate concept, kept elsewhere);
         // assuming OW == nozzle 1 here locked nozzle 1 PRP to the OW nozzle diameter (e.g. 0.4) on
@@ -10273,11 +10282,13 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                 std::string new_inherits = "Snapmaker U1 (" + ss.str() + " nozzle)";
                 if (pp.inherits() != new_inherits) {
                     pp.inherits() = new_inherits;
-                    const_cast<Preset&>(wxGetApp().preset_bundle->printers
-                        .get_selected_preset()).inherits() = new_inherits;
+                    if (!multiace)
+                        const_cast<Preset&>(wxGetApp().preset_bundle->printers
+                            .get_selected_preset()).inherits() = new_inherits;
                 }
             }
-            wxGetApp().preset_bundle->update_compatible(PresetSelectCompatibleType::Always);
+            wxGetApp().preset_bundle->update_compatible(PresetSelectCompatibleType::Always,
+                multiace ? PresetSelectCompatibleType::Never : PresetSelectCompatibleType::Always);
             wxGetApp().CallAfter([]() {
                 if (wxGetApp().plater()) {
                     wxGetApp().plater()->sidebar().update_presets(Preset::TYPE_PRINT);
@@ -23723,7 +23734,7 @@ void Plater::on_filaments_delete(size_t num_filaments, size_t filament_id, int r
 
 
 // BBS.
-void Plater::on_filaments_change(size_t num_filaments)
+void Plater::on_filaments_change(size_t num_filaments, bool paint_already_remapped)
 {
     // only update elements in plater
     update_filament_colors_in_full_config();
@@ -23823,7 +23834,9 @@ void Plater::on_filaments_change(size_t num_filaments)
                             << " changed_map=" << changed_map_preview;
 
     size_t obj_idx = 0;
-    for (ModelObject* mo : wxGetApp().model().objects) {
+    const auto &objects = wxGetApp().model().objects;
+    for (auto object = objects.begin(); !paint_already_remapped && object != objects.end(); ++object) {
+        ModelObject *mo = *object;
         size_t vol_idx = 0;
         for (ModelVolume* mv : mo->volumes) {
             std::string used_before;

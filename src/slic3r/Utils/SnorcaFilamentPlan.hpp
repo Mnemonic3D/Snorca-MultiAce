@@ -229,7 +229,11 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
             if(pass==0&&(m.empty()||rows[k].at("ownership").value("material",std::string())!=m))continue;              // SNORCA
             const double d=ca&&SnorcaColour::parse(rows[k].value("color",std::string()),b)?SnorcaColour::delta_e(a,b):1e9; // SNORCA
             if(d<bd){bd=d;best=int(k);same_material=pass==0;}}                                                          // SNORCA
-        if (best < 0) {
+        // A painted project can rely on the appearance of this row. Auto may
+        // adopt an exact material/color match, but an approximate substitution
+        // needs the explicit sync action.
+        const bool protect_project_colors = !manual && current.value("protect_project_colors", false);
+        if (best < 0 || (protect_project_colors && (!same_material || bd > 1e-6))) {
             remap[i] = int(rows.size());
             rows.push_back(old[i]);
             kept.push_back(what);

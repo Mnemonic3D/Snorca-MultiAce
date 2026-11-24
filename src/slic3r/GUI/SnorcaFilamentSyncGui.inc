@@ -389,6 +389,12 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 auto planning_before=before;planning_before["untouched_empty_palette"]=snorca_empty_palette_fingerprint(before)==self->p->snorca_sync_empty_baseline;
                 planning_before["verified_empty_repair"]=snorca_verified_empty_repair(before,address,serial);
                 planning_before["used"]=snorca_used_rows(); // SNORCA
+                const auto &objects = wxGetApp().plater()->model().objects;
+                planning_before["protect_project_colors"] = std::any_of(objects.begin(), objects.end(), [](const ModelObject *object) {
+                    return std::any_of(object->volumes.begin(), object->volumes.end(), [](const ModelVolume *volume) {
+                        return !volume->mmu_segmentation_facets.empty();
+                    });
+                });
                 // SNORCA (2026-11-13): Auto now moves objects off rows the printer does not have. When a filament move (Auto or     SNORCA
                 // button) was undone with Edit > Undo (snorca_sync_follow_undo_redo), Auto leaves the list and the objects alone   SNORCA
                 // for this printer until another printer is selected or the sync button is pressed, so the Undo is not redone.   SNORCA
@@ -491,7 +497,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
                             mc[j]=omc&&size_t(from[j])<omc->values.size()?omc->values[from[j]]:colors[j];md[j]=omd&&size_t(from[j])<omd->values.size()?omd->values[from[j]]:0;}} // SNORCA
                     if(mixed.active){const auto vmap=snorca_mixed_apply(mixed);model_undo=snorca_remap_model(row_remap,&vmap);} // SNORCA: one pass, physical and mixed
                     else bundle->update_multi_material_filament_presets();
-                    wxGetApp().plater()->on_filaments_change(rows.size());
+                    wxGetApp().plater()->on_filaments_change(rows.size(), /*paint_already_remapped=*/true);
                     for(auto* combo:self->p->combos_filament)combo->update();
                     self->update_nozzle_filament_slots();self->update_dynamic_filament_list();
                     wxGetApp().plater()->on_config_change(bundle->full_config());
@@ -525,7 +531,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
                         sp.snorca_sync_move_before_mc=old_multicolor;sp.snorca_sync_move_after_mc=bundle->ams_multi_color_filment;} // SNORCA
                     status(summary,tip+"\n"+inventory_details); // SNORCA
                 }catch(...){for(auto it=model_undo.rbegin();it!=model_undo.rend();++it)(*it)(); // SNORCA: model back as it was
-                    bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;snorca_mixed_reload(bundle,&mixed);wxGetApp().plater()->on_filaments_change(old_presets.size());wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
+                    bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;snorca_mixed_reload(bundle,&mixed);wxGetApp().plater()->on_filaments_change(old_presets.size(), /*paint_already_remapped=*/true);wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
                     wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update();throw;}
             }catch(const std::exception& e){status(std::string("Sync retained palette: ")+e.what());}
         });
@@ -551,7 +557,7 @@ void Sidebar::snorca_sync_follow_undo_redo() // SNORCA
         bundle->filament_presets=undo?sp.snorca_sync_move_before_presets:sp.snorca_sync_move_after_presets; // SNORCA
         bundle->project_config=cfg;bundle->ams_multi_color_filment=undo?sp.snorca_sync_move_before_mc:sp.snorca_sync_move_after_mc; // SNORCA
         SnorcaQuietGradients quiet_gradients;snorca_mixed_reload(bundle); // SNORCA (2026-11-14): mixed list from the restored definitions
-        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size());for(auto* combo:p->combos_filament)combo->update(); // SNORCA
+        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size(), /*paint_already_remapped=*/true);for(auto* combo:p->combos_filament)combo->update(); // SNORCA
         update_nozzle_filament_slots();update_dynamic_filament_list();wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
         wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update(); // SNORCA
         bundle->export_selections(*wxGetApp().app_config); // SNORCA
@@ -571,7 +577,7 @@ void Sidebar::undo_snorca_filament_sync()
         bundle->filament_presets=p->snorca_sync_undo_presets;bundle->project_config=*p->snorca_sync_undo_config;bundle->ams_multi_color_filment=p->snorca_sync_undo_multicolor;
         if(p->snorca_sync_undo_printer)wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(*p->snorca_sync_undo_printer);
         SnorcaQuietGradients quiet_gradients;snorca_mixed_reload(bundle); // SNORCA (2026-11-14)
-        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size());for(auto* combo:p->combos_filament)combo->update();
+        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size(), /*paint_already_remapped=*/true);for(auto* combo:p->combos_filament)combo->update();
         update_nozzle_filament_slots();update_dynamic_filament_list();wxGetApp().plater()->on_config_change(bundle->full_config());
                     wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update();
         bundle->export_selections(*wxGetApp().app_config);p->snorca_sync_undo_config.reset();p->snorca_sync_undo_printer.reset();p->snorca_sync_undo->Enable(false);
