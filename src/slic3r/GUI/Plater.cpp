@@ -205,6 +205,7 @@
 #include "SnorcaPrinterConnect.hpp"
 #include "slic3r/Utils/GatewayService.hpp"
 #include "slic3r/Utils/Http.hpp"
+#include "slic3r/Utils/SnorcaVibrationCalibration.hpp"
 #include <thread>
 #include <wx/timer.h>
 #include <atomic>
@@ -22873,7 +22874,33 @@ static SnorcaChamber snorca_detect_chamber(std::string host)                    
 // mock-ups (heater / top cover / both). Shown only for what the printer reported. Choices are remembered in the app  SNORCA
 // config (snorca_print_chamber_*), saved on Print only; a box greyed out by the device itself keeps its stored value. SNORCA
 // The chosen values go to `chamber` (upload extended_info); MultiACE.cpp writes the commands into the G-code.        SNORCA
-static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, const SnorcaChamber &ch, std::string &bed, bool &flow, // SNORCA
+static SnorcaVibrationCalibration::Result snorca_run_vibration_calibration(std::string host)
+{
+    using nlohmann::json;
+    host = host.substr(0, host.find(','));
+    boost::algorithm::trim(host);
+    if (host.empty())
+        return SnorcaVibrationCalibration::Result::unavailable;
+    if (host.rfind("http://", 0) != 0 && host.rfind("https://", 0) != 0)
+        host.insert(0, "http://");
+    if (host.back() != '/')
+        host += '/';
+
+    return SnorcaVibrationCalibration::run([&](const char* path, const json* body, long timeout) {
+        json response;
+        auto request = body ? Http::post(host + path) : Http::get(host + path);
+        if (body)
+            request.header("Content-Type", "application/json").set_post_body(body->dump());
+        request.direct_no_redirects()
+            .timeout_connect(3)
+            .timeout_max(timeout)
+            .on_complete([&](std::string data, unsigned) { response = json::parse(data, nullptr, false); })
+            .perform_sync();
+        return response;
+    });
+}
+
+static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, const std::string &host, const SnorcaChamber &ch, std::string &bed, bool &flow, // SNORCA
                                    std::map<std::string, std::string> &chamber)                               // SNORCA
 {                                                                                                              // SNORCA
     AppConfig *cfg = wxGetApp().app_config;                                                                    // SNORCA
@@ -22910,6 +22937,41 @@ static bool snorca_ask_print_options(wxWindow *parent, const wxString &printer, 
     cb->SetValue(flow);                                                                                        // SNORCA
     top->Add(cb, 0, wxLEFT | wxRIGHT | wxTOP, pad);                                                            // SNORCA
     top->Add(grey(_L("The printer measures each head before printing. Adds a few minutes.")), 0, wxLEFT | wxRIGHT, pad + indent); // SNORCA
+    auto* vibration = new wxButton(&dlg, wxID_ANY, _L("Vibration Compensation"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator,
+                                   "vibration_calibration");
+    top->Add(vibration, 0, wxLEFT | wxRIGHT | wxTOP, pad);
+    top->Add(grey(_L("Runs on an idle U1. Clear the build plate first.")), 0, wxLEFT | wxRIGHT, pad + indent);
+    vibration->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) {
+        using SnorcaVibrationCalibration::Result;
+        Result result = Result::unverified;
+        {
+            wxProgressDialog progress(_L("Vibration Compensation"),
+                                      _L("Waiting for the U1 to finish calibration. This can take several minutes."), 100, &dlg,
+                                      wxPD_APP_MODAL | wxPD_ELAPSED_TIME);
+            auto             work = std::async(std::launch::async, snorca_run_vibration_calibration, host);
+            while (work.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready)
+                progress.Pulse();
+            try {
+                result = work.get();
+            } catch (const std::exception& e) {
+                BOOST_LOG_TRIVIAL(error) << "Vibration compensation: " << e.what();
+            }
+        }
+
+        if (result == Result::completed) {
+            wxMessageBox(_L("Vibration compensation completed."), _L("Vibration Compensation"), wxOK | wxICON_INFORMATION, &dlg);
+        } else if (result == Result::busy) {
+            wxMessageBox(_L("The U1 is busy or not ready. Calibration was not started."), _L("Vibration Compensation"),
+                         wxOK | wxICON_WARNING, &dlg);
+        } else if (result == Result::unavailable) {
+            wxMessageBox(_L("Could not verify that this U1 supports calibration over LAN. Calibration was not started."),
+                         _L("Vibration Compensation"), wxOK | wxICON_WARNING, &dlg);
+        } else {
+            wxMessageBox(_L("Could not confirm that calibration finished. Check the U1 before sending a print."),
+                         _L("Vibration Compensation"), wxOK | wxICON_WARNING, &dlg);
+            dlg.EndModal(wxID_CANCEL);
+        }
+    });
     // ---- SNORCA (2026-11-13): chamber part, only for the devices the printer reported -------------------------- SNORCA
     const bool heater = ch.ok && !ch.heater.empty(), cover = ch.ok && ch.cover, both = heater && cover;        // SNORCA
     const bool dragon = ch.heater == "dragonbreath", panda = ch.heater == "panda_breath";                      // SNORCA
@@ -23193,7 +23255,7 @@ void Plater::fos_send_to_mms(int mms_system)
         const SnorcaChamber chamber_devices = snorca_detect_chamber(host);                                         // SNORCA (2026-11-13, chamber options)
         BOOST_LOG_TRIVIAL(warning) << "multiACE: chamber devices: " << (chamber_devices.ok ? "" : "not known, ") << chamber_devices.note; // SNORCA
         std::map<std::string, std::string> chamber;                                                            // SNORCA
-        if (!snorca_ask_print_options(wxGetApp().mainframe, from_u8(wxGetApp().preset_bundle->printers.get_selected_preset_name()), chamber_devices, bed, flow, chamber)) // SNORCA
+        if (!snorca_ask_print_options(wxGetApp().mainframe, from_u8(wxGetApp().preset_bundle->printers.get_selected_preset_name()), host, chamber_devices, bed, flow, chamber)) // SNORCA
             return;                                                                                            // SNORCA: Cancel = nothing exported, nothing sent
         upload_job.upload_data.extended_info["snorca_print_bed_calibration"]  = bed;                           // SNORCA
         upload_job.upload_data.extended_info["snorca_print_flow_calibration"] = flow ? "1" : "0";              // SNORCA
