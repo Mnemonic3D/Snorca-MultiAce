@@ -96,6 +96,8 @@ static bool snorca_verified_empty_repair(const nlohmann::json& state,const std::
 }
 void Sidebar::reset_snorca_filament_sync_baseline(bool explicit_new_project)
 {
+    if (explicit_new_project)
+        p->snorca_sync_imported_project = ObjectID();
     p->snorca_sync_empty_baseline.clear();
     try{const auto state=snorca_palette_state();
         if(state.at("has_objects").get<bool>()||!state.at("project").get<std::string>().empty())return;
@@ -280,11 +282,30 @@ static void snorca_sync_log(bool manual,const std::string& printer,const std::st
     BOOST_LOG_TRIVIAL(warning)<<"SNORCA filament sync ("<<(manual?"sync button":"auto")<<", "<<printer<<" "<<address<<"): "<<line;
 } // SNORCA
 
+void Sidebar::queue_snorca_project_color_sync()
+{
+    if (!snorca_upstream_sync_blocked())
+        return;
+    const auto &printer = wxGetApp().preset_bundle->printers.get_edited_preset();
+    const auto *host = printer.config.option<ConfigOptionString>("mms_host");
+    if (!host || host->value.empty())
+        return;
+    p->snorca_sync_imported_project = wxGetApp().plater()->model().id();
+    p->snorca_sync_last_palette.clear();
+    CallAfter([this] { sync_snorca_filaments(); });
+}
+
 void Sidebar::sync_snorca_filaments(bool manual)
 {
     using J=nlohmann::json;
     if(SnorcaPrinterConnect::refresh_device_flags())update_all_preset_comboboxes(false);
     if(p->snorca_sync_busy)return;
+    const auto &model = wxGetApp().plater()->model();
+    if (p->snorca_sync_imported_project != model.id() || model.objects.empty() || !snorca_upstream_sync_blocked())
+        p->snorca_sync_imported_project = ObjectID();
+    const bool importing_project = p->snorca_sync_imported_project.valid();
+    if (!manual && !importing_project && !p->snorca_sync_auto->GetValue())
+        return;
     // Recover missing connection metadata without asking the user to reconnect.
     wxGetApp().refresh_gateway_connection();
     SnorcaSelectedPrinter selected_printer;
@@ -329,7 +350,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
     const auto gateway=wxGetApp().gateway_service();
     const bool already_connected=use_gateway||SnorcaPrinterConnect::connected(device);
     std::shared_ptr<PrintHost> original_host;wxGetApp().get_connect_host(original_host);
-    p->snorca_sync_thread=std::thread([self,alive,generation,ticket,device,printer_config,already_connected,original_host,address,serial,preset_name,before,compatible,overrides,manual,use_gateway,gateway_generation,gateway](){
+    p->snorca_sync_thread=std::thread([self,alive,generation,ticket,device,printer_config,already_connected,original_host,address,serial,preset_name,before,compatible,overrides,manual,importing_project,use_gateway,gateway_generation,gateway](){
         auto connection=std::make_shared<SnorcaPrinterConnect::Ready>();
         if(!already_connected)*connection=SnorcaPrinterConnect::prepare(device,printer_config,alive,generation,ticket);
         J inventory;std::string error;
@@ -354,7 +375,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
             inventory=SnorcaFilamentSync::normalize(J::parse(response),serial,address,overrides);
             verify_gateway();
         }catch(const std::exception& e){error=e.what();}
-        wxGetApp().CallAfter([self,alive,generation,ticket,device,already_connected,original_host,connection,address,serial,preset_name,before,compatible,manual,inventory,error,use_gateway,gateway_generation](){
+        wxGetApp().CallAfter([self,alive,generation,ticket,device,already_connected,original_host,connection,address,serial,preset_name,before,compatible,manual,importing_project,inventory,error,use_gateway,gateway_generation](){
             if(!alive->load())return;self->p->snorca_sync_busy=false;
             std::string connection_note;
             // SNORCA: short line, full text in the tooltip, rewritten only when it changes, one log line per new result.
@@ -365,7 +386,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 snorca_sync_log(manual,preset_name,address,plain,details+(connection_note.empty()?std::string():"; "+connection_note));}; // SNORCA
             try{const auto current=snorca_selected_printer();if(current.address!=address||current.serial!=serial||current.preset!=preset_name||current.device.clientId!=device.clientId||current.gateway!=use_gateway||(use_gateway&&current.gateway_generation!=gateway_generation)){status("Printer changed; old color response discarded.");return;}}
             catch(const std::exception&){status("Selected printer registration changed; old color response discarded.");return;}
-            if(!manual&&!self->p->snorca_sync_auto->GetValue()){status("Auto sync paused; palette retained.");return;}
+            if(!manual&&!importing_project&&!self->p->snorca_sync_auto->GetValue()){status("Auto sync paused; palette retained.");return;}
             if(generation->load()!=ticket){status("Connection/sync request superseded; palette retained.");return;}
             if (!use_gateway) {
             std::shared_ptr<PrintHost> current_host;wxGetApp().get_connect_host(current_host);
@@ -405,18 +426,22 @@ void Sidebar::sync_snorca_filaments(bool manual)
                         return !volume->mmu_segmentation_facets.empty();
                     });
                 });
+                const bool match_imported_colors = importing_project || (manual && planning_before.at("protect_project_colors").get<bool>());
+                planning_before["match_imported_colors"] = match_imported_colors;
                 // SNORCA (2026-11-13): Auto now moves objects off rows the printer does not have. When a filament move (Auto or     SNORCA
                 // button) was undone with Edit > Undo (snorca_sync_follow_undo_redo), Auto leaves the list and the objects alone   SNORCA
                 // for this printer until another printer is selected or the sync button is pressed, so the Undo is not redone.   SNORCA
                 const std::string sel_key=preset_name+"|"+address+"|"+serial+"|"+device.clientId; // SNORCA
                 auto& sp=*self->p; bool auto_undone=false; // SNORCA
-                if(manual)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
+                if(manual||importing_project)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
                 else{ // SNORCA
                     if(!sp.snorca_sync_auto_undone_key.empty()&&sp.snorca_sync_auto_undone_key!=sel_key)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
                     auto_undone=!sp.snorca_sync_auto_undone_key.empty(); // SNORCA
                     if(auto_undone)planning_before["keep_used_not_on_printer"]=true;} // SNORCA
                 // SNORCA: the pool is exactly this printer's feeds (plan_exact); plan() kept other printers' rows.
                 const auto planned=SnorcaFilamentSync::plan_exact(planning_before,inventory,compatible,manual,MAXIMUM_EXTRUDER_NUMBER); // SNORCA
+                if (importing_project)
+                    sp.snorca_sync_imported_project = ObjectID();
                 auto* bundle=wxGetApp().preset_bundle;
                 const DynamicPrintConfig old_printer=bundle->printers.get_edited_preset().config;
                 const auto* diameters=old_printer.option<ConfigOptionFloats>("nozzle_diameter");
@@ -465,12 +490,16 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     for(const auto& k:planned.at("kept_not_on_printer"))result_note+="\n  "+k.get<std::string>();} // SNORCA
                 // SNORCA (2026-11-13): Auto moved objects off rows the printer does not have; say what moved, in one short line.
                 const size_t moved_n=planned.at("moved").size(); // SNORCA
-                if(!manual&&moved_n){std::string pairs; // SNORCA
+                if(match_imported_colors&&moved_n&&kept_n==0){
+                    result_label="Matched "+plural(moved_n,"project filament","project filaments")+" to "+preset_name;
+                    result_note="Project colors were matched to loaded spools. Check the new assignments in Preview.";
+                }
+                else if(!match_imported_colors&&!manual&&moved_n){std::string pairs; // SNORCA
                     for(const auto& m:planned.at("moved"))pairs+=(pairs.empty()?"":", ")+std::to_string(m.at("from").get<int>())+" "+m.value("from_name",std::string())+" → "+std::to_string(m.at("to").get<int>())+" "+m.value("to_name",std::string()); // SNORCA
                     result_label="Moved "+plural(moved_n,"object filament","object filaments")+" to match "+preset_name+": "+pairs; // SNORCA
                     result_note=plural(moved_n,"filament","filaments")+" used by objects "+(moved_n==1?"is":"are")+" not loaded on "+preset_name+"; Auto moved those objects to the printer filament of the same material with the closest colour (else the closest colour)."+(result_note.empty()?std::string():"\n"+result_note);} // SNORCA
                 for(const auto& r:planned.at("removed"))inventory_details+="\nRemoved: "+r.get<std::string>(); // SNORCA
-                for(const auto& m:planned.at("moved"))inventory_details+="\nObjects on filament "+std::to_string(m.at("from").get<int>())+" moved to "+std::to_string(m.at("to").get<int>())+(m.at("same_material").get<bool>()?" (same material, closest colour)":" (closest colour, other material)"); // SNORCA
+                for(const auto& m:planned.at("moved"))inventory_details+="\nObjects on filament "+std::to_string(m.at("from").get<int>())+" moved to "+std::to_string(m.at("to").get<int>())+(m.at("same_material").get<bool>()?" (same material)":" (different material)");
                 if(auto_undone&&planned.at("rows")!=before.at("rows")){ // SNORCA (2026-11-13): an undone move is left as it is
                     std::string note="The last filament move was undone with Edit > Undo, so Auto leaves the filament list and the objects as they are until another printer is selected or the sync button is pressed."; // SNORCA
                     for(const auto& k:planned.at("kept_not_on_printer"))note+="\nUsed by objects, not on "+preset_name+": "+k.get<std::string>(); // SNORCA

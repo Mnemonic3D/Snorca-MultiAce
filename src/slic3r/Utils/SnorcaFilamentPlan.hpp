@@ -145,8 +145,8 @@ inline nlohmann::json plan(const nlohmann::json& current, const nlohmann::json& 
 // switching printer A <-> printer B accumulated both printers' feeds (10 rows instead of 7).                                  SNORCA
 // Rows that are not a feed of this printer (another printer's, unowned, or a feed no longer reported):               SNORCA
 //  - not used by any object: removed;                                                                                  SNORCA
-//  - used by an object: use the closest printer row, preferring the same material. Protected projects require
-//    an exact material and color match. Unmatched project rows stay at the end with no nozzle assignment.
+//  - used by an object: use the closest printer row, normally preferring the same material. Imported project
+//    matching prioritizes color. Subsequent Auto sync preserves unmatched project rows.
 // Hand edits of a printer row (colour, preset, nozzle or slot changed by the user): the round button replaces them    SNORCA
 // with the printer's values; Auto keeps them and reports them as not following the printer.                           SNORCA
 // current: {rows:[{preset,color,nozzle,mms_slot,ownership}], used:[0-based row indices used by objects]}.             SNORCA
@@ -161,6 +161,7 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
     std::set<int> used; for(const auto& u:current.value("used",J::array()))used.insert(u.get<int>());                 // SNORCA
     const auto project_materials = current.value("project_materials", J::array());
     const bool protect_project_colors = current.value("protect_project_colors", false);
+    const bool match_imported_colors = current.value("match_imported_colors", false);
     const auto material_of = [&](size_t index) {
         if (index < project_materials.size() && !project_materials[index].get_ref<const std::string &>().empty())
             return project_materials[index].get<std::string>();
@@ -188,7 +189,7 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
             if (remap[i] >= 0 || own.value("key", std::string()) != key ||
                 own.value("printer_id", std::string()) != inventory.at("printer_id"))
                 continue;
-            if (protect_project_colors && used.count(int(i))) {
+            if ((protect_project_colors || match_imported_colors) && used.count(int(i))) {
                 const std::string material = material_of(i);
                 if (!feed.at("available").get<bool>() || material.empty() || material != feed.value("material", std::string()) ||
                     !feed.at("color").is_string() || !exact_color(old[i].value("color", std::string()), feed.at("color").get<std::string>()))
@@ -221,7 +222,7 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
             {"nozzle",feed.at("nozzle")},{"mms_slot",feed.at("mms_slot")}};                                            // SNORCA
         // Auto only: a field the user changed after the last import stays, and the import baseline stays with it,   SNORCA
         // so the next poll still sees it as a hand edit (same rule as plan() above).                                 SNORCA
-        if(!manual&&at>=0&&!own.empty()){                                                                               // SNORCA
+        if(!manual&&!match_imported_colors&&at>=0&&!own.empty()){                                                       // SNORCA
             bool edited=false;                                                                                          // SNORCA
             if(prev.value("color",std::string())!=own.value("color",std::string())){row["color"]=prev.at("color");ownership["color"]=own.at("color");edited=true;} // SNORCA
             if(old_preset!=own.value("preset",std::string())){row["preset"]=old_preset;ownership["preset"]=own.at("preset");edited=true;} // SNORCA
@@ -248,6 +249,54 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         const std::string m=detail::upper(material_of(i));
         int a[3],b[3]; const bool ca=SnorcaColour::parse(old[i].value("color",std::string()),a);                          // SNORCA
         int best=-1; double bd=1e18; bool same_material=false;                                                          // SNORCA
+        if (match_imported_colors) {
+            // CIEDE2000 can rank grey or white ahead of another shade of a saturated color.
+            // Compare hue families first, then use CIEDE2000 within the family.
+            double source[3]{};
+            if (ca)
+                SnorcaColour::lab(a, source);
+            const double source_chroma = std::hypot(source[1], source[2]);
+            constexpr double neutral_chroma = 12.0;
+            int black = -1, nearest = -1;
+            double black_distance = 1e18, nearest_distance = 1e18;
+            for (size_t k = 0; k < printer_rows; ++k) {
+                const auto &feed = feeds[k];
+                const auto material = feed.value("material", std::string());
+                const auto &color = feed.at("color");
+                if (!feed.at("available").get<bool>() || material.empty() || !color.is_string() ||
+                    !SnorcaColour::parse(color.get_ref<const std::string &>(), b))
+                    continue;
+                const int black_rgb[3]{0, 0, 0};
+                const double from_black = SnorcaColour::delta_e(black_rgb, b);
+                if (*std::max_element(b, b + 3) <= 32 && from_black < black_distance) {
+                    black = int(k);
+                    black_distance = from_black;
+                }
+                if (!ca)
+                    continue;
+                const double distance = SnorcaColour::delta_e(a, b);
+                if (distance < nearest_distance) {
+                    nearest = int(k);
+                    nearest_distance = distance;
+                }
+                double target[3];
+                SnorcaColour::lab(b, target);
+                const double target_chroma = std::hypot(target[1], target[2]);
+                const bool same_hue = source_chroma < neutral_chroma ? target_chroma < neutral_chroma :
+                    target_chroma >= neutral_chroma &&
+                        source[1] * target[1] + source[2] * target[2] >= 0.5 * source_chroma * target_chroma;
+                const bool same_candidate_material = material == m;
+                if (same_hue && (distance < bd || (distance == bd && same_candidate_material && !same_material))) {
+                    best = int(k);
+                    bd = distance;
+                    same_material = same_candidate_material;
+                }
+            }
+            if (best < 0) {
+                best = black >= 0 ? black : nearest;
+                same_material = best >= 0 && rows[best].at("ownership").value("material", std::string()) == m;
+            }
+        } else {
         for(int pass=0;pass<2&&best<0;++pass)for(size_t k=0;k<printer_rows;++k){                                        // SNORCA
             if (!rows[k].at("ownership").at("available").get<bool>())
                 continue;
@@ -261,11 +310,13 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
             if(pass==0&&(m.empty()||rows[k].at("ownership").value("material",std::string())!=m))continue;              // SNORCA
             const double d=ca&&SnorcaColour::parse(rows[k].value("color",std::string()),b)?SnorcaColour::delta_e(a,b):1e9; // SNORCA
             if(d<bd){bd=d;best=int(k);same_material=pass==0;}}                                                          // SNORCA
-        // Keep project colors unless the printer can reproduce them accurately.
-        if (best < 0 || (protect_project_colors && (!same_material || bd > 1e-6))) {
+            if (protect_project_colors && (!same_material || bd > 1e-6))
+                best = -1;
+        }
+        if (best < 0) {
             remap[i] = int(rows.size());
             auto retained = old[i];
-            if (protect_project_colors) {
+            if (protect_project_colors || match_imported_colors) {
                 retained["ownership"] = J::object();
                 retained["nozzle"] = -1;
                 retained["mms_slot"] = 0;

@@ -183,6 +183,7 @@ public:
     std::map<int, DynamicPrintConfig> build_filament_ams_list(MachineObject* obj);
     void sync_ams_list();
     void sync_snorca_filaments(bool manual = false);
+    void queue_snorca_project_color_sync();
     void reset_snorca_filament_sync_baseline(bool explicit_new_project = false);
     void undo_snorca_filament_sync();
     void snorca_sync_follow_undo_redo(); // SNORCA (2026-11-13): Edit > Undo / Redo of a filament move also puts the filament list back

@@ -159,7 +159,49 @@ int main()
     const auto moved_spool = Slic3r::SnorcaFilamentSync::plan_exact(formerly_synced, unmatched_inventory, presets, true, 64);
     const auto &saved_color = moved_spool["rows"][moved_spool["remap"][0].get<int>()];
     assert(moved_spool["moved"].empty() && saved_color["color"] == "#008000" && saved_color["nozzle"] == -1);
-    std::cout << "PASS: Auto and manual sync preserve unmatched project colors and match imported materials\n";
+    std::cout << "PASS: strict sync preserves unmatched project colors and matches imported materials\n";
+
+    auto tester_state = st;
+    for (auto &slot : tester_state["aces"][1]["slots"])
+        slot["material"] = "PLA";
+    tester_state["aces"][1]["slots"][0]["color"] = "#0033CC";
+    tester_state["aces"][1]["slots"][1]["color"] = "#B00000";
+    tester_state["aces"][1]["slots"][2]["color"] = "#EFEFEF";
+    tester_state["aces"][1]["slots"][3]["color"] = "#000000";
+    const json tester_project = {
+        {"rows", {{{"preset", "Imported PLA"}, {"color", "#0099FF"}},
+                  {{"preset", "Imported PLA Silk"}, {"color", "#FF0000"}},
+                  {{"preset", "Imported PLA"}, {"color", "#FFFFFF"}}}},
+        {"used", {0, 1, 2}}, {"protect_project_colors", true}, {"match_imported_colors", true},
+        {"project_materials", {"PLA", "PLA SILK", "PLA"}}
+    };
+    auto tester_presets = presets;
+    tester_presets.push_back({{"name", "Generic PLA"}, {"material", "PLA"}, {"generic", true}});
+    for (bool manual_sync : {false, true}) {
+        const auto matched = Slic3r::SnorcaFilamentSync::plan_exact(
+            tester_project, normalize(tester_state, "TEST", "192.168.4.30"), tester_presets, manual_sync, 8);
+        assert(matched["rows"].size() == 8 && matched["kept_not_on_printer"].empty());
+        assert(matched["remap"] == json::array({1, 3, 5}));
+        assert(matched["rows"][1]["color"] == "#0033CC" && matched["rows"][3]["nozzle"] == 1);
+        assert(matched["moved"][1]["same_material"] == false);
+    }
+    tester_state["aces"][1]["slots"][0]["state"] = "empty";
+    const auto fallback_inventory = normalize(tester_state, "TEST", "192.168.4.30");
+    const auto black = Slic3r::SnorcaFilamentSync::plan_exact(tester_project, fallback_inventory, tester_presets, false, 8);
+    assert(black["remap"] == json::array({7, 3, 5}) && black["rows"][7]["color"] == "#000000");
+    auto unreadable_project = tester_project;
+    unreadable_project["rows"][0]["color"] = "";
+    const auto unreadable = Slic3r::SnorcaFilamentSync::plan_exact(unreadable_project, fallback_inventory, tester_presets, false, 8);
+    assert(unreadable["remap"][0] == 7);
+    tester_state["aces"][1]["slots"][3]["state"] = "empty";
+    const auto without_black = Slic3r::SnorcaFilamentSync::plan_exact(
+        tester_project, normalize(tester_state, "TEST", "192.168.4.30"), tester_presets, false, 8);
+    assert(without_black["remap"][0] == 5 && without_black["rows"].size() == 8);
+    const auto no_color_to_match = Slic3r::SnorcaFilamentSync::plan_exact(
+        unreadable_project, normalize(tester_state, "TEST", "192.168.4.30"), tester_presets, false, 9);
+    assert(no_color_to_match["kept_not_on_printer"].size() == 1 && no_color_to_match["rows"].back()["nozzle"] == -1);
+    std::cout << "PASS: imported colors match eight loaded feeds, prioritize blue over white, and fall back to loaded black\n";
+
     partly_loaded["aces"][0]["slots"][0]["material"] = "UNSUPPORTED";
     auto plan_with_stale_material = Slic3r::SnorcaFilamentSync::plan_exact(project, normalize(partly_loaded, "TEST", "192.168.4.30"),
                                                                            presets, false, 64);

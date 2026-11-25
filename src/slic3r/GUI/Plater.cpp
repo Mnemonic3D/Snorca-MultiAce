@@ -998,6 +998,7 @@ struct Sidebar::priv
     std::shared_ptr<std::atomic<uint64_t>> snorca_sync_generation=std::make_shared<std::atomic<uint64_t>>(0);
     std::unique_ptr<wxTimer> snorca_sync_timer;
     bool snorca_sync_busy{false};
+    ObjectID snorca_sync_imported_project;
     std::string snorca_sync_last_selection;
     std::chrono::steady_clock::time_point snorca_sync_last_read;
     std::string snorca_sync_last_palette; // SNORCA: a changed filament list (project load, hand edit) is checked at once, not after 10 s
@@ -3330,7 +3331,7 @@ Sidebar::Sidebar(Plater *parent)
             bool connected=wxGetApp().gateway_device_connected();for(const auto& device:wxGetApp().app_config->get_devices())connected=connected||device.connected;
             if(!connected){const wxString text="Printer disconnected. Previous filament palette retained.";p->snorca_sync_status->SetLabel(text);p->snorca_sync_status->SetToolTip(text);}
         }
-        if(p->snorca_sync_auto->GetValue())sync_snorca_filaments(false);
+        if(p->snorca_sync_auto->GetValue() || p->snorca_sync_imported_project.valid())sync_snorca_filaments(false);
         // SNORCA (2026-11-12): with Auto off a printer switch changes nothing by itself, but the line says the pool is not this printer's yet.
         else if(const auto name=wxGetApp().preset_bundle->printers.get_selected_preset_name();name!=*snorca_seen_printer&&!snorca_seen_printer->empty()){   // SNORCA
             const wxString text=wxString::FromUTF8("Auto is off: press sync to load "+name);                                                          // SNORCA
@@ -20183,6 +20184,7 @@ void Plater::force_update_all_plate_thumbnails()
 
 // BBS: backup
 std::vector<size_t> Plater::load_files(const std::vector<fs::path>& input_files, LoadStrategy strategy, bool ask_multi) {
+    const bool empty_workspace = model().objects.empty();
     //BBS: wish to reset state when load a new file
     p->m_slice_all_only_has_gcode = false;
     //BBS: wish to reset all plates stats item selected state when load a new file
@@ -20201,6 +20203,12 @@ std::vector<size_t> Plater::load_files(const std::vector<fs::path>& input_files,
         sync_filament_temp_mixing_notification();
         sync_flow_ratio_zero_notification();
         sync_cold_plate_notification();
+        if ((strategy & LoadStrategy::LoadModel) && !(strategy & LoadStrategy::Restore) &&
+            (empty_workspace || (strategy & LoadStrategy::LoadConfig)) &&
+            std::any_of(input_files.begin(), input_files.end(), [](const fs::path &path) {
+                return boost::iequals(path.extension().string(), ".3mf");
+            }))
+            sidebar().queue_snorca_project_color_sync();
     }
     return loaded;
 }
