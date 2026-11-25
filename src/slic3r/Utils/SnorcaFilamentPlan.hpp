@@ -273,7 +273,15 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         const std::string m=detail::upper(material_of(i));
         int a[3],b[3]; const bool ca=SnorcaColour::parse(old[i].value("color",std::string()),a);                          // SNORCA
         int best=-1; double bd=1e18; bool same_material=false;                                                          // SNORCA
-        if (match_imported_colors) {
+        // A used row from this printer's now-unavailable feed cannot remain
+        // printable on that feed. Reuse the project import color matcher.
+        const std::string source_key = own.value("key", std::string());
+        const bool unavailable_source = !source_key.empty() &&
+            own.value("printer_id", std::string()) == inventory.at("printer_id") &&
+            std::any_of(feeds.begin(), feeds.end(), [&](const J &feed) {
+                return feed.at("key") == source_key && !feed.at("available").get<bool>();
+            });
+        if (match_imported_colors || unavailable_source) {
             // CIEDE2000 can rank grey or white ahead of another shade of a saturated color.
             // Compare hue families, also allowing close shades such as white and cream.
             double source[3]{};

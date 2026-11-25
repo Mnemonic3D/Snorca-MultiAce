@@ -235,6 +235,27 @@ int main()
     assert(miles["rows"][1]["preset"] == "Generic PLA");
     std::cout << "PASS: Multi mode maps the imported blue PLA to the loaded blue Polymaker in filament 6\n";
 
+    // A project already using cyan PETG must stay routable when ACE 1 goes offline.
+    auto active_project = miles_project;
+    active_project["rows"] = miles["rows"];
+    active_project["used"] = {6};
+    active_project.erase("match_imported_colors");
+    active_project.erase("project_materials");
+    miles_state["aces"][0]["connected"] = false;
+    const auto offline_inventory = normalize(miles_state, "TEST", "192.168.4.30");
+    const auto reconnected_palette = Slic3r::SnorcaFilamentSync::plan_exact(
+        active_project, offline_inventory, miles_presets, false, 64);
+    assert(reconnected_palette["rows"].size() == 8);
+    assert(reconnected_palette["kept_not_on_printer"].empty());
+    assert(reconnected_palette["remap"][6] == 5);
+    assert(reconnected_palette["rows"][5]["ownership"]["available"] == true);
+    auto undone_project = active_project;
+    undone_project["keep_used_not_on_printer"] = true;
+    const auto kept_after_undo = Slic3r::SnorcaFilamentSync::plan_exact(
+        undone_project, offline_inventory, miles_presets, false, 64);
+    assert(kept_after_undo["rows"].size() == 9 && kept_after_undo["remap"][6] == 8);
+    std::cout << "PASS: an unavailable ACE feed remaps its used color to a loaded spool without a ninth row\n";
+
     partly_loaded["aces"][0]["slots"][0]["material"] = "UNSUPPORTED";
     auto plan_with_stale_material = Slic3r::SnorcaFilamentSync::plan_exact(project, normalize(partly_loaded, "TEST", "192.168.4.30"),
                                                                            presets, false, 64);
