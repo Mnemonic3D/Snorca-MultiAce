@@ -251,12 +251,13 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         int best=-1; double bd=1e18; bool same_material=false;                                                          // SNORCA
         if (match_imported_colors) {
             // CIEDE2000 can rank grey or white ahead of another shade of a saturated color.
-            // Compare hue families first, then use CIEDE2000 within the family.
+            // Compare hue families, also allowing close shades such as white and cream.
             double source[3]{};
             if (ca)
                 SnorcaColour::lab(a, source);
             const double source_chroma = std::hypot(source[1], source[2]);
             constexpr double neutral_chroma = 12.0;
+            constexpr double close_shade_distance = 18.0;
             int black = -1, nearest = -1;
             double black_distance = 1e18, nearest_distance = 1e18;
             for (size_t k = 0; k < printer_rows; ++k) {
@@ -286,7 +287,8 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
                     target_chroma >= neutral_chroma &&
                         source[1] * target[1] + source[2] * target[2] >= 0.5 * source_chroma * target_chroma;
                 const bool same_candidate_material = material == m;
-                if (same_hue && (distance < bd || (distance == bd && same_candidate_material && !same_material))) {
+                if ((same_hue || distance <= close_shade_distance) &&
+                    (distance < bd || (distance == bd && same_candidate_material && !same_material))) {
                     best = int(k);
                     bd = distance;
                     same_material = same_candidate_material;

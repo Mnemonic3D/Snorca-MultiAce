@@ -189,6 +189,12 @@ int main()
     const auto fallback_inventory = normalize(tester_state, "TEST", "192.168.4.30");
     const auto black = Slic3r::SnorcaFilamentSync::plan_exact(tester_project, fallback_inventory, tester_presets, false, 8);
     assert(black["remap"] == json::array({7, 3, 5}) && black["rows"][7]["color"] == "#000000");
+    // On the live 33 U1 capture, the nearest spool to white is cream, while blue needs the black fallback.
+    tester_state["aces"][1]["slots"][2]["color"] = "#DCDCB8";
+    const auto cream = Slic3r::SnorcaFilamentSync::plan_exact(
+        tester_project, normalize(tester_state, "TEST", "192.168.4.30"), tester_presets, false, 8);
+    assert(cream["remap"] == json::array({7, 3, 5}) && cream["rows"][5]["color"] == "#DCDCB8");
+    tester_state["aces"][1]["slots"][2]["color"] = "#EFEFEF";
     auto unreadable_project = tester_project;
     unreadable_project["rows"][0]["color"] = "";
     const auto unreadable = Slic3r::SnorcaFilamentSync::plan_exact(unreadable_project, fallback_inventory, tester_presets, false, 8);
