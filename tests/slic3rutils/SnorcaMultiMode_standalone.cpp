@@ -191,10 +191,14 @@ int main()
     assert(black["remap"] == json::array({7, 3, 5}) && black["rows"][7]["color"] == "#000000");
     // On the live 33 U1 capture, the nearest spool to white is cream, while blue needs the black fallback.
     tester_state["aces"][1]["slots"][2]["color"] = "#DCDCB8";
+    tester_state["aces"][1]["slots"][2]["material"] = "ASA";
+    auto cream_presets = tester_presets;
+    cream_presets.push_back({{"name", "Generic ASA"}, {"material", "ASA"}, {"generic", true}});
     const auto cream = Slic3r::SnorcaFilamentSync::plan_exact(
-        tester_project, normalize(tester_state, "TEST", "192.168.4.30"), tester_presets, false, 8);
+        tester_project, normalize(tester_state, "TEST", "192.168.4.30"), cream_presets, false, 8);
     assert(cream["remap"] == json::array({7, 3, 5}) && cream["rows"][5]["color"] == "#DCDCB8");
     tester_state["aces"][1]["slots"][2]["color"] = "#EFEFEF";
+    tester_state["aces"][1]["slots"][2]["material"] = "PLA";
     auto unreadable_project = tester_project;
     unreadable_project["rows"][0]["color"] = "";
     const auto unreadable = Slic3r::SnorcaFilamentSync::plan_exact(unreadable_project, fallback_inventory, tester_presets, false, 8);
@@ -207,6 +211,29 @@ int main()
         unreadable_project, normalize(tester_state, "TEST", "192.168.4.30"), tester_presets, false, 9);
     assert(no_color_to_match["kept_not_on_printer"].size() == 1 && no_color_to_match["rows"].back()["nozzle"] == -1);
     std::cout << "PASS: imported colors match eight loaded feeds, prioritize blue over white, and fall back to loaded black\n";
+
+    auto miles_state = st;
+    for (auto &slot : miles_state["aces"][1]["slots"])
+        slot["material"] = "PLA";
+    // Cyan PETG is closer by color alone. The project needs the loaded blue PLA.
+    miles_state["aces"][0]["slots"][3]["color"] = "#45BBDD";
+    miles_state["aces"][1]["slots"][2].update({{"color", "#143DBC"}, {"brand", "Polymaker"}, {"source", "override"}});
+    auto miles_presets = tester_presets;
+    miles_presets.push_back({{"name", "Polymaker General PLA Family @U1"}, {"material", "PLA"},
+                            {"vendor", "POLYMAKER"}, {"visible", false}, {"nozzles", {0, 1, 2, 3}}});
+    miles_presets.push_back({{"name", "Polymaker Silk PLA Family @U1"}, {"material", "PLA"},
+                            {"vendor", "POLYMAKER"}, {"visible", true}, {"nozzles", {0, 1, 2, 3}}});
+    auto miles_project = tester_project;
+    miles_project["rows"][0]["color"] = "#46A8F9";
+    miles_project["used"] = {0};
+    const auto miles_inventory = normalize(miles_state, "TEST", "192.168.4.30");
+    const auto miles = Slic3r::SnorcaFilamentSync::plan_exact(miles_project, miles_inventory, miles_presets, false, 8);
+    assert(miles["remap"][0] == 5 && miles["rows"][5]["color"] == "#143DBC");
+    assert(miles["rows"][5]["preset"] == "Polymaker General PLA Family @U1");
+    assert(miles["rows"][5]["ownership"]["brand"] == "Polymaker");
+    assert(miles["rows"][5]["ownership"]["key"] == "TEST|ACE:1:2");
+    assert(miles["rows"][1]["preset"] == "Generic PLA");
+    std::cout << "PASS: Multi mode maps the imported blue PLA to the loaded blue Polymaker in filament 6\n";
 
     partly_loaded["aces"][0]["slots"][0]["material"] = "UNSUPPORTED";
     auto plan_with_stale_material = Slic3r::SnorcaFilamentSync::plan_exact(project, normalize(partly_loaded, "TEST", "192.168.4.30"),

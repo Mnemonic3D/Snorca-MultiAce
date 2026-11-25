@@ -848,8 +848,9 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
 
     // Orca: Raft, grid, snug and organic supports use these two parameters to control the size & density of the "brim"/flange
     // raft_first_layer_expansion also drives the no-raft normal-tree first-layer expansion
-    // (aligned with BambuStudio), so keep it editable whenever support is enabled, raft or not.
-    toggle_field("raft_first_layer_expansion", have_support_material);
+    // (aligned with BambuStudio). The global value is also inherited by objects
+    // that enable supports individually, so keep it editable in Global settings.
+    toggle_field("raft_first_layer_expansion", is_global_config || have_support_material);
     toggle_field("raft_first_layer_density", have_support_material && !(support_is_normal_tree && !have_raft));
 
     bool has_ironing = (config->opt_enum<IroningType>("ironing_type") != IroningType::NoIroning);

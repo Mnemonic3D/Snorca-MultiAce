@@ -146,15 +146,19 @@ inline json row(const std::string& printer_id, const std::string& address, const
                 bool available, bool identity_supplied, const std::string& source, json& warnings)
 {
     const std::string material = upper(text(item, "material"));
+    const std::string brand = available ? text(item, "brand") : std::string();
     const json swatch = color(item, identity_supplied && !material.empty(), warnings, label);
     const bool identified = available && identity_supplied && !material.empty() && !swatch.is_null();
     std::string description = label + (available ? "" : " (unavailable)");
     description += material.empty() ? " — unknown material" : " — " + material;
+    if (!brand.empty())
+        description += " / " + brand;
     if (swatch.is_null())
         description += " / unknown color";
     if (available && !identified)
         warnings.push_back(label + ": identity unverified; supplied values are not RFID confirmation");
-    return {{"key", printer_id + "|" + address}, {"label", description}, {"material", material},
+    return {{"key", printer_id + "|" + address}, {"label", description}, {"material", material}, {"brand", brand},
+            {"subtype", available ? text(item, "subtype") : std::string()},
             {"color", swatch}, {"nozzle", nozzle}, {"mms_slot", slot}, {"ace_unit", ace}, {"ace_slot", ace_slot},
             {"source", source}, {"identified", identified}, {"available", available}, {"user_override", false}};
 }

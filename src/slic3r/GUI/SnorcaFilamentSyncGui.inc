@@ -30,12 +30,28 @@ static nlohmann::json snorca_palette_state()
 static nlohmann::json snorca_compatible_filaments()
 {
     using J=nlohmann::json;J result=J::array();auto* bundle=wxGetApp().preset_bundle;
+    const auto &machine = bundle->printers.get_edited_preset().config;
+    const auto *diameters = machine.option<ConfigOptionFloats>("nozzle_diameter");
+    const auto model = machine.opt_string("printer_model");
     for(const auto& preset:bundle->filaments.get_presets()){
-        if(!preset.is_compatible||!preset.is_visible)continue;
+        if(!preset.is_compatible || preset.is_project_embedded)continue;
         const auto* type=preset.config.option<ConfigOptionStrings>("filament_type");
         if(!type||type->values.empty())continue;
-        result.push_back({{"name",preset.name},{"material",SnorcaFilamentSync::detail::upper(type->values[0])},
-            {"generic",preset.name.find("Generic ")!=std::string::npos}});
+        const auto *vendor = preset.config.option<ConfigOptionStrings>("filament_vendor");
+        const auto *compatible = preset.config.option<ConfigOptionStrings>("compatible_printers");
+        const auto brand = vendor && !vendor->values.empty() ? SnorcaFilamentSync::detail::upper(vendor->values.front()) : std::string();
+        J row{{"name", preset.name}, {"material", SnorcaFilamentSync::detail::upper(type->values.front())},
+            {"vendor", brand}, {"visible", preset.is_visible}, {"generic", preset.name.find("Generic ") != std::string::npos}};
+        if (diameters && compatible && !compatible->values.empty()) {
+            auto &nozzles = row["nozzles"] = J::array();
+            for (size_t j = 0; j < diameters->values.size(); ++j) {
+                const auto expected = model + " (" + float_to_string_decimal_point(diameters->values[j], 1) + " nozzle)";
+                if (std::find(compatible->values.begin(), compatible->values.end(), expected) != compatible->values.end())
+                    nozzles.push_back(j);
+            }
+        }
+        if (preset.is_visible || (preset.is_system && !brand.empty() && brand != "GENERIC" && row.contains("nozzles")))
+            result.push_back(std::move(row));
     }
     return result;
 }
@@ -513,6 +529,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 wxGetApp().plater()->take_snapshot("Sync printer colors");
                 const size_t snapshot_time=wxGetApp().plater()->undo_redo_stack_main().active_snapshot_time(); // SNORCA (2026-11-13)
                 std::vector<std::function<void()>> model_undo; // SNORCA
+                std::vector<std::string> revealed_presets;
                 const auto row_remap=planned.at("remap").get<std::vector<int>>(); // SNORCA
                 SnorcaMixedRemap mixed; // SNORCA (2026-11-14)
                 SnorcaQuietGradients quiet_gradients; // SNORCA: no auto-gradient question during the sync
@@ -536,6 +553,12 @@ void Sidebar::sync_snorca_filaments(bool manual)
                             mc[j]=omc&&size_t(from[j])<omc->values.size()?omc->values[from[j]]:colors[j];md[j]=omd&&size_t(from[j])<omd->values.size()?omd->values[from[j]]:0;}} // SNORCA
                     if(mixed.active){const auto vmap=snorca_mixed_apply(mixed);model_undo=snorca_remap_model(row_remap,&vmap);} // SNORCA: one pass, physical and mixed
                     else bundle->update_multi_material_filament_presets();
+                    for (const auto &name : bundle->filament_presets) {
+                        if (auto *preset = bundle->filaments.find_preset(name, false); preset && preset->is_system && !preset->is_visible) {
+                            revealed_presets.push_back(name);
+                            preset->is_visible = true;
+                        }
+                    }
                     wxGetApp().plater()->on_filaments_change(rows.size(), /*paint_already_remapped=*/true);
                     for(auto* combo:self->p->combos_filament)combo->update();
                     self->update_nozzle_filament_slots();self->update_dynamic_filament_list();
@@ -546,6 +569,8 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     if(planned.value("clean_empty_palette",false)&&snorca_legacy_cleanup_grant_matches(before))wxGetApp().app_config->set("snorca_filament_startup_replace_v1",""); // SNORCA
                     if(planned.value("clean_empty_palette",false)&&snorca_verified_empty_repair(before,address,serial))wxGetApp().app_config->set("snorca_filament_repair_v1",""); // SNORCA
                     bundle->export_selections(*wxGetApp().app_config);
+                    for (const auto &name : revealed_presets)
+                        wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, name, "true");
                     self->p->snorca_sync_undo_config.reset(new DynamicPrintConfig(old_config));self->p->snorca_sync_undo_printer.reset(new DynamicPrintConfig(old_printer));self->p->snorca_sync_undo_presets=old_presets;self->p->snorca_sync_undo_multicolor=old_multicolor;
                     self->reset_snorca_filament_sync_baseline();self->p->snorca_sync_undo_after=snorca_palette_state().dump();self->p->snorca_sync_last_palette=self->p->snorca_sync_undo_after;self->p->snorca_sync_undo->Enable(true); // SNORCA
                     update_feed_tooltips(rows);
@@ -570,6 +595,8 @@ void Sidebar::sync_snorca_filaments(bool manual)
                         sp.snorca_sync_move_before_mc=old_multicolor;sp.snorca_sync_move_after_mc=bundle->ams_multi_color_filment;} // SNORCA
                     status(summary,tip+"\n"+inventory_details); // SNORCA
                 }catch(...){for(auto it=model_undo.rbegin();it!=model_undo.rend();++it)(*it)(); // SNORCA: model back as it was
+                    for (const auto &name : revealed_presets)
+                        if (auto *preset = bundle->filaments.find_preset(name, false)) preset->is_visible = false;
                     bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;snorca_mixed_reload(bundle,&mixed);wxGetApp().plater()->on_filaments_change(old_presets.size(), /*paint_already_remapped=*/true);wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
                     wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update();throw;}
             }catch(const std::exception& e){status(std::string("Sync retained palette: ")+e.what());}

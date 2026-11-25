@@ -201,13 +201,37 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         const J prev=at>=0?old[at]:J::object(); const J own=prev.value("ownership",J::object());                       // SNORCA
         const bool available = feed.at("available").get<bool>();
         const std::string material = available ? feed.value("material", std::string()) : std::string();
+        const auto brand = feed.value("brand", std::string());
+        const auto vendor = detail::upper(brand);
+        const auto subtype = detail::upper(feed.value("subtype", std::string()));
         const std::string old_preset = prev.value("preset", std::string()); // SNORCA
         std::string selected;                                                                                           // SNORCA
-        for(const auto& p:compatible_presets)if(p.at("name")==old_preset&&p.at("material")==material)selected=old_preset; // SNORCA
-        if(selected.empty()&&!material.empty())for(const auto& p:compatible_presets)if(p.at("material")==material){selected=p.at("name");if(p.value("generic",false))break;} // SNORCA
+        int branded_rank = 0;
+        for (const auto &preset : compatible_presets) {
+            if (vendor.empty() || vendor == "GENERIC" || material.empty() || preset.at("material") != material ||
+                preset.value("vendor", std::string()) != vendor)
+                continue;
+            const auto candidates = preset.find("nozzles");
+            if (candidates != preset.end() && std::find(candidates->begin(), candidates->end(), feed.at("nozzle")) == candidates->end())
+                continue;
+            const auto name = preset.at("name").get<std::string>();
+            const auto upper_name = detail::upper(name);
+            const bool exact_subtype = subtype.size() >= 3 && subtype != "NONE" && subtype != "STANDARD" &&
+                subtype != material && upper_name.find(subtype) != std::string::npos;
+            const bool general_family = upper_name.find(" GENERAL " + material + " FAMILY") != std::string::npos;
+            const bool branded_default = upper_name.substr(0, upper_name.find(" @")) == vendor + " " + material;
+            const int rank = exact_subtype ? 4 : general_family ? 3 : branded_default ? 2 : name == old_preset ? 1 : 0;
+            if (rank > branded_rank) {
+                branded_rank = rank;
+                selected = name;
+            }
+        }
+        if(selected.empty())for(const auto& p:compatible_presets)if(p.value("visible",true)&&p.at("name")==old_preset&&p.at("material")==material)selected=old_preset;
+        if(selected.empty()&&!material.empty())for(const auto& p:compatible_presets)if(p.value("visible",true)&&p.at("material")==material){selected=p.at("name");if(p.value("generic",false))break;}
         if(selected.empty()){                                                                                           // SNORCA
             if(!material.empty())throw std::invalid_argument("No compatible local "+material+" filament preset. Previous palette retained."); // SNORCA
-            selected=!old_preset.empty()?old_preset:(compatible_presets.empty()?std::string():compatible_presets[0].at("name").get<std::string>()); // SNORCA
+            selected=old_preset;
+            if(selected.empty())for(const auto& p:compatible_presets)if(p.value("visible",true)){selected=p.at("name");break;}
             if (available)
                 warnings.push_back(feed.at("label").get<std::string>()+": material unidentified; preset is only a placeholder.");
         } // SNORCA
@@ -216,7 +240,7 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
                                                                           : prev.value("color", std::string("#808080")); // SNORCA
         J row={{"preset",selected},{"color",color},{"nozzle",feed.at("nozzle")},{"mms_slot",feed.at("mms_slot")}};    // SNORCA
         J ownership={{"key",key},{"printer_id",inventory.at("printer_id")},{"host",inventory.at("host")},              // SNORCA
-            {"label",feed.at("label")},{"material",material},{"source",feed.at("source")},                              // SNORCA
+            {"label",feed.at("label")},{"material",material},{"brand",brand},{"source",feed.at("source")},
             {"identified",feed.at("identified")},{"available",feed.at("available")},                                    // SNORCA
             {"user_override",feed.at("user_override")},{"color",color},{"preset",selected},                             // SNORCA
             {"nozzle",feed.at("nozzle")},{"mms_slot",feed.at("mms_slot")}};                                            // SNORCA
@@ -283,12 +307,12 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
                 double target[3];
                 SnorcaColour::lab(b, target);
                 const double target_chroma = std::hypot(target[1], target[2]);
-                const bool same_hue = source_chroma < neutral_chroma ? target_chroma < neutral_chroma :
-                    target_chroma >= neutral_chroma &&
-                        source[1] * target[1] + source[2] * target[2] >= 0.5 * source_chroma * target_chroma;
+                const bool same_hue = source_chroma >= neutral_chroma && target_chroma >= neutral_chroma &&
+                    source[1] * target[1] + source[2] * target[2] >= 0.5 * source_chroma * target_chroma;
                 const bool same_candidate_material = material == m;
                 if ((same_hue || distance <= close_shade_distance) &&
-                    (distance < bd || (distance == bd && same_candidate_material && !same_material))) {
+                    (best < 0 || (same_candidate_material && !same_material) ||
+                     (same_candidate_material == same_material && distance < bd))) {
                     best = int(k);
                     bd = distance;
                     same_material = same_candidate_material;
