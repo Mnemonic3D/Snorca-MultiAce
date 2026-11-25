@@ -135,17 +135,31 @@ int main()
     auto painted_project = project;
     painted_project["protect_project_colors"] = true;
     const auto unmatched_inventory = normalize(partly_loaded, "TEST", "192.168.4.30");
+    const auto manual_paint = Slic3r::SnorcaFilamentSync::plan_exact(painted_project, unmatched_inventory, presets, true, 64);
+    assert(manual_paint["moved"].empty() && manual_paint["kept_not_on_printer"].size() == 1);
     const auto retained_paint = Slic3r::SnorcaFilamentSync::plan_exact(painted_project, unmatched_inventory, presets, false, 64);
     assert(retained_paint["moved"].empty() && retained_paint["kept_not_on_printer"].size() == 1);
-    assert(retained_paint["rows"][retained_paint["remap"][0].get<int>()] == project["rows"][0]);
-    const auto manual_paint = Slic3r::SnorcaFilamentSync::plan_exact(painted_project, unmatched_inventory, presets, true, 64);
-    assert(manual_paint["moved"].size() == 1 && manual_paint["remap"][0] == 1);
+    const auto &retained = retained_paint["rows"][retained_paint["remap"][0].get<int>()];
+    assert(retained["color"] == project["rows"][0]["color"] && retained["nozzle"] == -1);
+    assert(retained["ownership"].empty());
+    assert(manual_paint["rows"][manual_paint["remap"][0].get<int>()] == retained);
     auto exact_inventory = partly_loaded;
     exact_inventory["aces"][1]["slots"][0]["color"] = "#008000";
-    const auto exact_paint = Slic3r::SnorcaFilamentSync::plan_exact(
-        painted_project, normalize(exact_inventory, "TEST", "192.168.4.30"), presets, false, 64);
-    assert(exact_paint["moved"].size() == 1 && exact_paint["remap"][0] == 1);
-    std::cout << "PASS: Auto preserves unmatched painted colors, exact matches and manual sync can map them\n";
+    auto imported_project = painted_project;
+    imported_project["rows"][0]["preset"] = "Embedded project PETG";
+    imported_project["project_materials"] = {"PETG"};
+    for (bool manual_sync : {false, true}) {
+        const auto exact_paint = Slic3r::SnorcaFilamentSync::plan_exact(
+            imported_project, normalize(exact_inventory, "TEST", "192.168.4.30"), presets, manual_sync, 64);
+        assert(exact_paint["moved"].size() == 1 && exact_paint["remap"][0] == 1);
+    }
+    auto formerly_synced = painted_project;
+    formerly_synced["rows"][0] = manual_paint["rows"][1];
+    formerly_synced["rows"][0]["color"] = "#008000";
+    const auto moved_spool = Slic3r::SnorcaFilamentSync::plan_exact(formerly_synced, unmatched_inventory, presets, true, 64);
+    const auto &saved_color = moved_spool["rows"][moved_spool["remap"][0].get<int>()];
+    assert(moved_spool["moved"].empty() && saved_color["color"] == "#008000" && saved_color["nozzle"] == -1);
+    std::cout << "PASS: Auto and manual sync preserve unmatched project colors and match imported materials\n";
     partly_loaded["aces"][0]["slots"][0]["material"] = "UNSUPPORTED";
     auto plan_with_stale_material = Slic3r::SnorcaFilamentSync::plan_exact(project, normalize(partly_loaded, "TEST", "192.168.4.30"),
                                                                            presets, false, 64);

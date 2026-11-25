@@ -3276,9 +3276,28 @@ ConfigSubstitutions PresetBundle::load_config_file(const std::string &path, Forw
 
 // Load a config file from a boost property_tree. This is a private method called from load_config_file.
 // is_external == false on if called from ConfigWizard
+static bool keep_local_multiace_printer(const DynamicPrintConfig &active, const DynamicPrintConfig &project)
+{
+    const auto *active_model = active.option<ConfigOptionString>("printer_model");
+    const auto *project_model = project.option<ConfigOptionString>("printer_model");
+    const auto *active_nozzles = active.option<ConfigOptionFloats>("nozzle_diameter");
+    const auto *project_nozzles = project.option<ConfigOptionFloats>("nozzle_diameter");
+    const auto *active_host = active.option<ConfigOptionString>("mms_host");
+    const auto *project_host = project.option<ConfigOptionString>("mms_host");
+    const auto *supply = active.option("mms_system");
+    return supply && supply->getInt() == int(MultiMaterialSupply::mmsMultiACE) &&
+        active_host && !active_host->value.empty() && (!project_host || project_host->value.empty()) &&
+        active_model && active_model->value == "Snapmaker U1" && project_model && project_model->value == active_model->value &&
+        active_nozzles && active_nozzles->values.size() == 4 &&
+        project_nozzles && project_nozzles->values == active_nozzles->values;
+}
+
 void PresetBundle::load_config_file_config(const std::string &name_or_path, bool is_external, DynamicPrintConfig &&config, Semver file_version, bool selected, bool is_custom_defined)
 {
     PrinterTechnology printer_technology = Preset::printer_technology(config);
+    const Preset &active_printer = this->printers.get_edited_preset();
+    const bool keep_printer = is_external && printer_technology == ptFFF && boost::iends_with(name_or_path, ".3mf") &&
+        !active_printer.is_external && keep_local_multiace_printer(active_printer.config, config);
 
     auto clear_compatible_printers = [](DynamicPrintConfig& config){
         ConfigOption *opt_compatible = config.optptr("compatible_printers");
@@ -3416,7 +3435,8 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
             printer_different_keys_set.insert(ignore_settings_list.begin(), ignore_settings_list.end());
         //BBS: add config related logs
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": load printer preset from printer_settings_id");
-        load_preset(this->printers, num_filaments + 1, "printer_settings_id", printer_different_keys_set, std::string());
+        if (!keep_printer)
+            load_preset(this->printers, num_filaments + 1, "printer_settings_id", printer_different_keys_set, std::string());
 
         // 3) Now load the filaments. If there are multiple filament presets, split them and load them.
         auto old_filament_profile_names = config.option<ConfigOptionStrings>("filament_settings_id", true);
@@ -3530,6 +3550,13 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
 
         // 4) Load the project config values (the per extruder wipe matrix etc).
         this->project_config.apply_only(config, s_project_options);
+        if (keep_printer) {
+            // The incoming colors belong to the project. Any existing feed
+            // routes refer to a different palette and must be matched again.
+            this->project_config.option<ConfigOptionInts>("fos_filament_nozzle", true)->values.assign(num_filaments, -1);
+            this->project_config.option<ConfigOptionInts>("fos_filament_mms_slot", true)->values.assign(num_filaments, 0);
+            this->project_config.option<ConfigOptionStrings>("fos_filament_sync", true)->values.assign(num_filaments, "");
+        }
         EnsureFilamentColorFieldsAligned(this->project_config);
         EnsureFilamentVolumeTypesAligned(this->project_config, this->filament_presets.size());
 
