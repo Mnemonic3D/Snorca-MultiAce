@@ -60,3 +60,30 @@ $installed = Join-Path $env:RUNNER_TEMP 'Snorca installed fresh'
 $setup = Start-Process $installer.FullName -ArgumentList "/S /D=$installed" -PassThru -Wait
 if ($setup.ExitCode -ne 0) { throw "Installer failed: $($setup.ExitCode)" }
 Test-Package $installed 'installer'
+
+# Simulate an update over an existing install whose uninstaller is missing.
+# The recorded custom install location must be reused without /D.
+$legacyAsset = Join-Path $installed 'resources/web/flutter_web/posthog-array.0930d984aecf936d75a80e534e55d1eb.js'
+$index = Join-Path $installed 'resources/web/flutter_web/index.html'
+$expectedIndexHash = (Get-FileHash $index).Hash
+Set-Content $legacyAsset 'obsolete bundle asset'
+Set-Content $index 'older installed application file'
+Remove-Item (Join-Path $installed 'Uninstall.exe')
+$portableData = Join-Path $installed 'data_dir'
+New-Item -ItemType Directory -Force $portableData | Out-Null
+$profileMarker = Join-Path $portableData 'upgrade-profile-marker.txt'
+$projectMarker = Join-Path $installed 'upgrade-project-marker.3mf'
+Set-Content $profileMarker 'original portable settings'
+Set-Content $projectMarker 'original project'
+$profileHash = (Get-FileHash $profileMarker).Hash
+$projectHash = (Get-FileHash $projectMarker).Hash
+
+$setup = Start-Process $installer.FullName -ArgumentList '/S' -PassThru -Wait
+if ($setup.ExitCode -ne 0) { throw "In-place update failed: $($setup.ExitCode)" }
+if ((Get-FileHash $index).Hash -ne $expectedIndexHash) { throw 'Installer did not replace the old application file in the registered folder' }
+if (Test-Path $legacyAsset) { throw 'Installer left a known obsolete web asset behind' }
+if (-not (Test-Path (Join-Path $installed 'Uninstall.exe'))) { throw 'Installer did not recreate its uninstaller' }
+if ((Get-FileHash $profileMarker).Hash -ne $profileHash) { throw 'Installer changed the portable profile' }
+if ((Get-FileHash $projectMarker).Hash -ne $projectHash) { throw 'Installer changed the user project' }
+@{ location_reused=$true; old_uninstaller_missing=$true; obsolete_file_removed=$true; installed_file_replaced=$true; profile_preserved=$true; project_preserved=$true } |
+    ConvertTo-Json | Set-Content "$evidence/in-place-upgrade.json"

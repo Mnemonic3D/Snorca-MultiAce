@@ -1641,10 +1641,19 @@ void PresetCollection::load_project_embedded_presets(std::vector<Preset*>& proje
         }
     }
 
-    m_presets.insert(m_presets.end(), std::make_move_iterator(presets_loaded.begin()), std::make_move_iterator(presets_loaded.end()));
-    std::sort(m_presets.begin() + m_num_default_presets, m_presets.end());
-    //don't select it here
-    //this->select_preset(first_visible_idx());
+    if (!presets_loaded.empty()) {
+        // Sorting can shift the selected entry. Keep the index and edited preset
+        // referring to the same preset without discarding current edits.
+        const std::string selected_name = m_idx_selected < m_presets.size() ? m_presets[m_idx_selected].name : std::string();
+        m_presets.insert(m_presets.end(), std::make_move_iterator(presets_loaded.begin()), std::make_move_iterator(presets_loaded.end()));
+        std::sort(m_presets.begin() + m_num_default_presets, m_presets.end());
+        if (!selected_name.empty()) {
+            const auto selected = std::find_if(m_presets.begin(), m_presets.end(), [&selected_name](const Preset &preset) {
+                return preset.name == selected_name;
+            });
+            m_idx_selected = size_t(std::distance(m_presets.begin(), selected));
+        }
+    }
     unlock();
 
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(" finished, %1% got %2% presets, errors_cummulative %3%")%Preset::get_type_string(m_type) %presets_loaded.size() %errors_cummulative;

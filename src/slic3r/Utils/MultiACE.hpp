@@ -16,6 +16,7 @@
 // file that already carries multiACE's processed markers, so never send G-code
 // that has been through multiace post_process_virtual_toolheads.py.
 
+#include <set>
 #include <string>
 #include <map>   // SNORCA
 #include <vector> // SNORCA
@@ -66,9 +67,7 @@ public:
         std::string error;                // network / HTTP / parse detail for the dialog
         std::string mode;                 // "normal" | "multi" | "head" ("single" is
                                           // mapped to multi, matching ace.py's rewrite)
-        int         units_seen = 0;       // distinct units in live_slots. LOWER BOUND: a
-                                          // unit with no rfid/override-identified spool
-                                          // is invisible to this endpoint.
+        int         units_seen = -1;      // connected MMUs, or unknown on older firmware
         std::vector<bool>   ace_driven_heads; // head-indexed; head mode only
         std::vector<double> head_nozzles;     // head-indexed supply diameters; may be empty
     };
@@ -97,7 +96,8 @@ public:
     static bool snorca_assign_head_targets(const std::string &report_json, int index_base,   // SNORCA
                                          std::map<std::string, std::string> &assignment,   // SNORCA
                                          std::string &reason, std::string &summary,        // SNORCA
-                                         std::vector<std::vector<std::string>> *plan = nullptr); // SNORCA
+                                         std::vector<std::vector<std::string>> *plan = nullptr,
+                                         const std::set<int>& used_filaments = {}); // SNORCA
 private:                                                                                  // SNORCA
     int snorca_auto_start(const PrintHostUpload &upload_data, ProgressFn progress_fn) const; // SNORCA
     mutable SnorcaOutcome m_snorca_outcome;                                                   // SNORCA

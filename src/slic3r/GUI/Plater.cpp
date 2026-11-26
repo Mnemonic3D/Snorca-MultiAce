@@ -998,6 +998,7 @@ struct Sidebar::priv
     std::shared_ptr<std::atomic<uint64_t>> snorca_sync_generation=std::make_shared<std::atomic<uint64_t>>(0);
     std::unique_ptr<wxTimer> snorca_sync_timer;
     bool snorca_sync_busy{false};
+    ObjectID snorca_sync_imported_project;
     std::string snorca_sync_last_selection;
     std::chrono::steady_clock::time_point snorca_sync_last_read;
     std::string snorca_sync_last_palette; // SNORCA: a changed filament list (project load, hand edit) is checked at once, not after 10 s
@@ -1309,8 +1310,6 @@ struct DynamicFilamentList : DynamicList
 
     void apply_on(Choice *c) override
     {
-        if (items.empty())
-            update(true);
         auto cb = dynamic_cast<ComboBox *>(c->window);
         auto n  = cb->GetSelection();
         cb->Clear();
@@ -1332,24 +1331,34 @@ struct DynamicFilamentList : DynamicList
         long n = 0;
         return (value.ToLong(&n) && n <= items.size()) ? int(n) : -1;
     }
-    void update(bool force = false)
+    void refresh_choice(Choice *choice) override
     {
-        items.clear();
-        if (!force && m_choices.empty())
+        rebuild_items();
+        apply_on(choice);
+    }
+
+    void update()
+    {
+        if (m_choices.empty())
             return;
-        auto icons = get_extruder_color_icons(true);
-        auto presets = wxGetApp().preset_bundle->filament_presets;
-        for (int i = 0; i < presets.size(); ++i) {
-            wxString str;
-            std::string type;
-            // FOS: guard against nullptr during preset selection state transition
-auto* filament_preset = wxGetApp().preset_bundle->filaments.find_preset(presets[i]);
-if (filament_preset)
-    filament_preset->get_filament_type(type);
-            str << type;
-            items.push_back({str, icons[i]});
-        }
+        rebuild_items();
         DynamicList::update();
+    }
+
+private:
+    void rebuild_items()
+    {
+        const auto icons = get_extruder_color_icons(true);
+        auto &bundle = *wxGetApp().preset_bundle;
+        const auto &presets = bundle.filament_presets;
+
+        items.clear();
+        for (size_t i = 0; i < std::min(presets.size(), icons.size()); ++i) {
+            std::string type;
+            if (auto *preset = bundle.filaments.find_preset(presets[i]))
+                preset->get_filament_type(type);
+            items.emplace_back(wxString::FromUTF8(type), icons[i]);
+        }
     }
 };
 
@@ -1357,8 +1366,6 @@ struct DynamicFilamentList1Based : DynamicFilamentList
 {
     void apply_on(Choice *c) override
     {
-        if (items.empty())
-            update(true);
         auto cb = dynamic_cast<ComboBox *>(c->window);
         auto n  = cb->GetSelection();
         cb->Clear();
@@ -1381,24 +1388,6 @@ struct DynamicFilamentList1Based : DynamicFilamentList
             return -1;
         --n;
         return (n >= 0 && n <= items.size()) ? int(n) : -1;
-    }
-    void update(bool force = false)
-    {
-        items.clear();
-        if (!force && m_choices.empty())
-            return;
-        auto icons = get_extruder_color_icons(true);
-        auto presets = wxGetApp().preset_bundle->filament_presets;
-        for (int i = 0; i < presets.size(); ++i) {
-            wxString str;
-            std::string type;
-            // FOS: guard against nullptr during preset selection state transition
-auto* fp = wxGetApp().preset_bundle->filaments.find_preset(presets[i]);
-if (fp) fp->get_filament_type(type);
-            str << type;
-            items.push_back({str, icons[i]});
-        }
-        DynamicList::update();
     }
 
 };
@@ -1979,8 +1968,6 @@ struct DynamicFilamentListGated : DynamicFilamentList
 {
     void apply_on(Choice *c) override
     {
-        if (items.empty())
-            update(true);
         auto cb = dynamic_cast<ComboBox *>(c->window);
         auto n  = cb->GetSelection();
         cb->Clear();
@@ -3344,7 +3331,7 @@ Sidebar::Sidebar(Plater *parent)
             bool connected=wxGetApp().gateway_device_connected();for(const auto& device:wxGetApp().app_config->get_devices())connected=connected||device.connected;
             if(!connected){const wxString text="Printer disconnected. Previous filament palette retained.";p->snorca_sync_status->SetLabel(text);p->snorca_sync_status->SetToolTip(text);}
         }
-        if(p->snorca_sync_auto->GetValue())sync_snorca_filaments(false);
+        if(p->snorca_sync_auto->GetValue() || p->snorca_sync_imported_project.valid())sync_snorca_filaments(false);
         // SNORCA (2026-11-12): with Auto off a printer switch changes nothing by itself, but the line says the pool is not this printer's yet.
         else if(const auto name=wxGetApp().preset_bundle->printers.get_selected_preset_name();name!=*snorca_seen_printer&&!snorca_seen_printer->empty()){   // SNORCA
             const wxString text=wxString::FromUTF8("Auto is off: press sync to load "+name);                                                          // SNORCA
@@ -10041,8 +10028,11 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                 boost::icontains(printer_model_opt->value, "Snapmaker") &&
                 boost::icontains(printer_model_opt->value, "U1");
 
-            if (p->m_fos_mixed_nozzle_mode) {
-                // Mixed mode: update individual nozzle
+            const bool multiace = snorca_upstream_sync_blocked();
+            if (p->m_fos_mixed_nozzle_mode || multiace) {
+                // Keep the selected multiACE printer and its palette when changing diameter.
+                const bool all_nozzles = !p->m_fos_mixed_nozzle_mode;
+                const std::string edited_name = wxGetApp().preset_bundle->printers.get_edited_preset().name;
                 // FOS: update swatch and bar colors
                 wxColour bg;
                 if      (dstr == "0.2") bg = wxColour(0xFF, 0xFF, 0xFF);
@@ -10056,23 +10046,27 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                     bar->SetBackgroundColour(bg);
                     bar->Refresh();
                 }
-                wxGetApp().CallAfter([this, i, dval, dstr, ow_ext_idx]() {
-                    auto* nd2 = wxGetApp().preset_bundle->printers.get_edited_preset()
-                        .config.option<ConfigOptionFloats>("nozzle_diameter");
-                    if (nd2 && i < nd2->values.size())
+                wxGetApp().CallAfter([this, i, dval, ow_ext_idx, multiace, all_nozzles, edited_name]() {
+                    auto& bundle = *wxGetApp().preset_bundle;
+                    auto& printer = bundle.printers.get_edited_preset();
+                    auto* nd2 = printer.config.option<ConfigOptionFloats>("nozzle_diameter");
+                    if (printer.name != edited_name || nd2 == nullptr || i >= nd2->values.size())
+                        return;
+                    if (all_nozzles)
+                        std::fill(nd2->values.begin(), nd2->values.end(), dval);
+                    else
                         nd2->values[i] = dval;
                     wxGetApp().get_tab(Preset::TYPE_PRINTER)->update();
                     // FOS 8.6.2: inherits follows the OUTER WALL nozzle alone - it selects the
                     // parent whose process presets apply, which is not a per-nozzle question.
-                    if ((int)i == ow_ext_idx) {
-                        auto& pp = wxGetApp().preset_bundle->printers.get_edited_preset();
-                        if (!pp.is_system) {
+                    if (all_nozzles || (int)i == ow_ext_idx) {
+                        if (!printer.is_system) {
                             std::ostringstream ss;
                             ss << std::fixed << std::setprecision(1) << dval;
                             std::string new_inherits = "Snapmaker U1 (" + ss.str() + " nozzle)";
-                            pp.inherits() = new_inherits;
-                            const_cast<Preset&>(wxGetApp().preset_bundle->printers
-                                .get_selected_preset()).inherits() = new_inherits;
+                            printer.inherits() = new_inherits;
+                            if (!multiace)
+                                const_cast<Preset&>(bundle.printers.get_selected_preset()).inherits() = new_inherits;
                         }
                     }
                     // FOS 8.6.2: recompute compatibility for EVERY nozzle, not only the outer
@@ -10082,7 +10076,8 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                     // drops them on its next rebuild - which the filament map dialog forces.
                     // It must also run AFTER nd2 is written; the old synchronous copy that
                     // followed this lambda ran before it and always read the stale array.
-                    wxGetApp().preset_bundle->update_compatible(PresetSelectCompatibleType::Always);
+                    bundle.update_compatible(PresetSelectCompatibleType::Always,
+                        multiace ? PresetSelectCompatibleType::Never : PresetSelectCompatibleType::Always);
                     wxGetApp().CallAfter([]() {
                         if (wxGetApp().plater()) {
                             wxGetApp().plater()->sidebar().update_presets(Preset::TYPE_PRINT);
@@ -10272,6 +10267,7 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
 
     // FOS: refresh PRP when switching PTP
     if (switch_machine) {
+        const bool multiace = snorca_upstream_sync_blocked();
         // FOS 8.5.1: nozzle 1 PRP / printer base follows nozzle 1 OWN diameter (index 0), NOT the
         // outer-wall nozzle. OW is the MAPS layer-height spine (a separate concept, kept elsewhere);
         // assuming OW == nozzle 1 here locked nozzle 1 PRP to the OW nozzle diameter (e.g. 0.4) on
@@ -10287,11 +10283,13 @@ void Sidebar::update_nozzle_settings_now(bool switch_machine)
                 std::string new_inherits = "Snapmaker U1 (" + ss.str() + " nozzle)";
                 if (pp.inherits() != new_inherits) {
                     pp.inherits() = new_inherits;
-                    const_cast<Preset&>(wxGetApp().preset_bundle->printers
-                        .get_selected_preset()).inherits() = new_inherits;
+                    if (!multiace)
+                        const_cast<Preset&>(wxGetApp().preset_bundle->printers
+                            .get_selected_preset()).inherits() = new_inherits;
                 }
             }
-            wxGetApp().preset_bundle->update_compatible(PresetSelectCompatibleType::Always);
+            wxGetApp().preset_bundle->update_compatible(PresetSelectCompatibleType::Always,
+                multiace ? PresetSelectCompatibleType::Never : PresetSelectCompatibleType::Always);
             wxGetApp().CallAfter([]() {
                 if (wxGetApp().plater()) {
                     wxGetApp().plater()->sidebar().update_presets(Preset::TYPE_PRINT);
@@ -20186,6 +20184,7 @@ void Plater::force_update_all_plate_thumbnails()
 
 // BBS: backup
 std::vector<size_t> Plater::load_files(const std::vector<fs::path>& input_files, LoadStrategy strategy, bool ask_multi) {
+    const bool empty_workspace = model().objects.empty();
     //BBS: wish to reset state when load a new file
     p->m_slice_all_only_has_gcode = false;
     //BBS: wish to reset all plates stats item selected state when load a new file
@@ -20204,6 +20203,12 @@ std::vector<size_t> Plater::load_files(const std::vector<fs::path>& input_files,
         sync_filament_temp_mixing_notification();
         sync_flow_ratio_zero_notification();
         sync_cold_plate_notification();
+        if ((strategy & LoadStrategy::LoadModel) && !(strategy & LoadStrategy::Restore) &&
+            (empty_workspace || (strategy & LoadStrategy::LoadConfig)) &&
+            std::any_of(input_files.begin(), input_files.end(), [](const fs::path &path) {
+                return boost::iequals(path.extension().string(), ".3mf");
+            }))
+            sidebar().queue_snorca_project_color_sync();
     }
     return loaded;
 }
@@ -23737,7 +23742,7 @@ void Plater::on_filaments_delete(size_t num_filaments, size_t filament_id, int r
 
 
 // BBS.
-void Plater::on_filaments_change(size_t num_filaments)
+void Plater::on_filaments_change(size_t num_filaments, bool paint_already_remapped)
 {
     // only update elements in plater
     update_filament_colors_in_full_config();
@@ -23837,7 +23842,9 @@ void Plater::on_filaments_change(size_t num_filaments)
                             << " changed_map=" << changed_map_preview;
 
     size_t obj_idx = 0;
-    for (ModelObject* mo : wxGetApp().model().objects) {
+    const auto &objects = wxGetApp().model().objects;
+    for (auto object = objects.begin(); !paint_already_remapped && object != objects.end(); ++object) {
+        ModelObject *mo = *object;
         size_t vol_idx = 0;
         for (ModelVolume* mv : mo->volumes) {
             std::string used_before;
@@ -24659,6 +24666,7 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
     bool update_scheduled = false;
     bool bed_shape_changed = false;
     bool print_sequence_changed = false;
+    bool filament_swatches_changed = false;
     t_config_option_keys diff_keys = p->config->diff(config);
     for (auto opt_key : diff_keys) {
         if (opt_key == "filament_colour") {
@@ -24672,11 +24680,12 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
             });
 
             if (update_filament_colors_in_full_config()) {
-                p->sidebar->obj_list()->update_filament_colors();
-                p->sidebar->update_dynamic_filament_list();
+                filament_swatches_changed = true;
                 continue;
             }
         }
+        if (opt_key == "filament_multi_colors" || opt_key == "filament_colour_mode")
+            filament_swatches_changed = true;
         if (opt_key == "material_colour") {
             update_scheduled = true; // update should be scheduled (for update 3DScene)
         }
@@ -24739,6 +24748,11 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
             if (opt_key == "wall_filament")
                 wxGetApp().obj_list()->update_object_filament_column_display();
         }
+    }
+
+    if (filament_swatches_changed) {
+        p->sidebar->obj_list()->update_filament_colors();
+        p->sidebar->update_dynamic_filament_list();
     }
 
     if (bed_shape_changed)

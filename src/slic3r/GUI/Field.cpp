@@ -1277,7 +1277,7 @@ void DynamicList::add_choice(Choice *choice)
 {
     auto iter = std::find(m_choices.begin(), m_choices.end(), choice);
     if (iter != m_choices.end()) return;
-    apply_on(choice);
+    refresh_choice(choice);
     m_choices.push_back(choice);
 }
 
@@ -1380,7 +1380,11 @@ void Choice::BUILD()
         else
             e.Skip();
         }, temp->GetId());
-    temp->Bind(wxEVT_COMBOBOX_DROPDOWN, [this](wxCommandEvent&) { m_is_dropped = true; }, temp->GetId());
+    temp->Bind(wxEVT_COMBOBOX_DROPDOWN, [this](wxCommandEvent&) {
+        if (m_list)
+            m_list->refresh_choice(this);
+        m_is_dropped = true;
+    }, temp->GetId());
     temp->Bind(wxEVT_COMBOBOX_CLOSEUP,  [this](wxCommandEvent&) { m_is_dropped = false; }, temp->GetId());
 
     temp->Bind(wxEVT_COMBOBOX,          [this](wxCommandEvent&) { on_change_field(); }, temp->GetId());

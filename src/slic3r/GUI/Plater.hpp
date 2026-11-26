@@ -183,6 +183,7 @@ public:
     std::map<int, DynamicPrintConfig> build_filament_ams_list(MachineObject* obj);
     void sync_ams_list();
     void sync_snorca_filaments(bool manual = false);
+    void queue_snorca_project_color_sync();
     void reset_snorca_filament_sync_baseline(bool explicit_new_project = false);
     void undo_snorca_filament_sync();
     void snorca_sync_follow_undo_redo(); // SNORCA (2026-11-13): Edit > Undo / Redo of a filament move also puts the filament list back
@@ -615,7 +616,7 @@ public:
     // BBS: return false if not changed
     bool leave_gizmos_stack();
 
-    void on_filaments_change(size_t extruders_count);
+    void on_filaments_change(size_t extruders_count, bool paint_already_remapped = false);
     void on_filaments_delete(size_t extruders_count, size_t filament_id, int replace_filament_id = -1, const std::vector<unsigned char>& is_mixed_snapshot = {});
     bool confirm_auto_generated_gradients(size_t num_physical);
     void set_auto_generated_gradient_decision(size_t num_physical, bool create_auto_gradients);

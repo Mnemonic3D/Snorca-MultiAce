@@ -408,6 +408,7 @@ class DynamicList
 public:
     virtual ~DynamicList() {}
     virtual void apply_on(Choice * choice) = 0;
+    virtual void refresh_choice(Choice *choice) = 0;
     virtual wxString get_value(int index) = 0;
     virtual int      index_of(wxString value) = 0;
 

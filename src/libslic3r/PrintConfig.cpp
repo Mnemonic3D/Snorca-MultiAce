@@ -1381,7 +1381,9 @@ void PrintConfigDef::init_fff_params()
     def->label = L("Brim type");
     def->category = L("Support");
     def->tooltip = L("This controls the generation of the brim at outer and/or inner side of models. "
-                     "Auto means the brim width is analyzed and calculated automatically.");
+                     "Auto calculates the model brim width. Object settings can override the global value. "
+                     "For support adhesion use Support > Support/raft first-layer expansion. "
+                     "The prime tower has its own brim setting.");
     def->enum_keys_map = &ConfigOptionEnum<BrimType>::get_enum_values();
     def->enum_values.emplace_back("auto_brim");
     def->enum_values.emplace_back("brim_ears");
@@ -4827,9 +4829,10 @@ def = this->add("outer_wall_layer_height_max", coFloat);
     def->set_default_value(new ConfigOptionPercent(90));
 
     def = this->add("raft_first_layer_expansion", coFloat);
-    def->label = L("Initial layer expansion");
+    def->label = L("Support/raft first-layer expansion");
     def->category = L("Support");
-    def->tooltip = L("Expand the first raft or support layer to improve bed plate adhesion, -1 means auto");
+    def->tooltip = L("Expand the first raft or support layer to improve adhesion, independent of the model brim. "
+                     "Set 0 for no added expansion or -1 for automatic expansion.");
     def->sidetext = "mm";	// milimeters, don't need translation
     def->min = -1;
     def->mode = comAdvanced;

@@ -71,7 +71,8 @@ ComboBox::ComboBox(wxWindow *parent,
     });
     drop.Bind(EVT_DISMISS, [this](auto &) {
         drop_down = false;
-        wxCommandEvent e(wxEVT_COMBOBOX_CLOSEUP);
+        wxCommandEvent e(wxEVT_COMBOBOX_CLOSEUP, GetId());
+        e.SetEventObject(this);
         GetEventHandler()->ProcessEvent(e);
     });
     for (int i = 0; i < n; ++i) Append(choices[i]);
@@ -254,11 +255,12 @@ void ComboBox::mouseDown(wxMouseEvent &event)
     if (drop_down) {
         drop.Hide();
     } else if (drop.HasDismissLongTime()) {
+        wxCommandEvent e(wxEVT_COMBOBOX_DROPDOWN, GetId());
+        e.SetEventObject(this);
+        GetEventHandler()->ProcessEvent(e);
         drop.autoPosition();
         drop_down = true;
         drop.Popup(&drop);
-        wxCommandEvent e(wxEVT_COMBOBOX_DROPDOWN);
-        GetEventHandler()->ProcessEvent(e);
     }
 }
 
@@ -282,11 +284,12 @@ void ComboBox::keyDown(wxKeyEvent& event)
             if (drop_down) {
                 drop.DismissAndNotify();
             } else if (drop.HasDismissLongTime()) {
+                wxCommandEvent e(wxEVT_COMBOBOX_DROPDOWN, GetId());
+                e.SetEventObject(this);
+                GetEventHandler()->ProcessEvent(e);
                 drop.autoPosition();
                 drop_down = true;
                 drop.Popup();
-                wxCommandEvent e(wxEVT_COMBOBOX_DROPDOWN);
-                GetEventHandler()->ProcessEvent(e);
             }
             break;
         case WXK_UP:

@@ -145,9 +145,8 @@ inline nlohmann::json plan(const nlohmann::json& current, const nlohmann::json& 
 // switching printer A <-> printer B accumulated both printers' feeds (10 rows instead of 7).                                  SNORCA
 // Rows that are not a feed of this printer (another printer's, unowned, or a feed no longer reported):               SNORCA
 //  - not used by any object: removed;                                                                                  SNORCA
-//  - used by an object: removed, and the objects move to the printer row of the same material with the closest        SNORCA
-//    colour (CIEDE2000), else to the closest colour of any material. Round button and Auto alike (2026-11-13); Auto   SNORCA
-//    keeps them at the END of the pool only when current.keep_used_not_on_printer is set (an Auto move was undone).   SNORCA
+//  - used by an object: use the closest printer row, normally preferring the same material. Imported project
+//    matching prioritizes color. Subsequent Auto sync preserves unmatched project rows.
 // Hand edits of a printer row (colour, preset, nozzle or slot changed by the user): the round button replaces them    SNORCA
 // with the printer's values; Auto keeps them and reports them as not following the printer.                           SNORCA
 // current: {rows:[{preset,color,nozzle,mms_slot,ownership}], used:[0-based row indices used by objects]}.             SNORCA
@@ -160,7 +159,22 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
     if(!incoming.is_array()||incoming.empty())throw std::invalid_argument("The printer inventory is empty.");          // SNORCA
     const J old=current.at("rows"); J warnings=inventory.at("warnings");                                               // SNORCA
     std::set<int> used; for(const auto& u:current.value("used",J::array()))used.insert(u.get<int>());                 // SNORCA
-    auto material_of=[&](const std::string& preset){for(const auto& p:compatible_presets)if(p.at("name")==preset)return p.at("material").get<std::string>();return std::string();}; // SNORCA
+    const auto project_materials = current.value("project_materials", J::array());
+    const bool protect_project_colors = current.value("protect_project_colors", false);
+    const bool match_imported_colors = current.value("match_imported_colors", false);
+    const auto material_of = [&](size_t index) {
+        if (index < project_materials.size() && !project_materials[index].get_ref<const std::string &>().empty())
+            return project_materials[index].get<std::string>();
+        const auto &name = old[index].at("preset");
+        for (const auto &preset : compatible_presets)
+            if (preset.at("name") == name)
+                return preset.at("material").get<std::string>();
+        return std::string();
+    };
+    const auto exact_color = [](const std::string &first, const std::string &second) {
+        int a[3], b[3];
+        return SnorcaColour::parse(first, a) && SnorcaColour::parse(second, b) && std::equal(a, a + 3, b);
+    };
     std::vector<J> feeds; std::set<std::string> seen;                                                                  // SNORCA
     for(const auto& f:incoming){if(!seen.insert(f.at("key").get<std::string>()).second)throw std::invalid_argument("Duplicate printer feed identity.");feeds.push_back(f);} // SNORCA
     std::stable_sort(feeds.begin(),feeds.end(),[](const J& a,const J& b){                                             // SNORCA
@@ -170,28 +184,69 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
     for(const auto& feed:feeds){                                                                                        // SNORCA
         const std::string key=feed.at("key");                                                                           // SNORCA
         int at=-1;                                                                                                      // SNORCA
-        for(size_t i=0;i<old.size();++i){const J own=old[i].value("ownership",J::object());                             // SNORCA
-            if(remap[i]<0&&own.value("key",std::string())==key&&own.value("printer_id",std::string())==inventory.at("printer_id")){at=int(i);break;}} // SNORCA
+        for (size_t i = 0; i < old.size(); ++i) {
+            const J own = old[i].value("ownership", J::object());
+            if (remap[i] >= 0 || own.value("key", std::string()) != key ||
+                own.value("printer_id", std::string()) != inventory.at("printer_id"))
+                continue;
+            if ((protect_project_colors || match_imported_colors) && used.count(int(i))) {
+                const std::string material = material_of(i);
+                if (!feed.at("available").get<bool>() || material.empty() || material != feed.value("material", std::string()) ||
+                    !feed.at("color").is_string() || !exact_color(old[i].value("color", std::string()), feed.at("color").get<std::string>()))
+                    continue;
+            }
+            at = int(i);
+            break;
+        }
         const J prev=at>=0?old[at]:J::object(); const J own=prev.value("ownership",J::object());                       // SNORCA
-        const std::string material=feed.value("material",std::string()), old_preset=prev.value("preset",std::string()); // SNORCA
+        const bool available = feed.at("available").get<bool>();
+        const std::string material = available ? feed.value("material", std::string()) : std::string();
+        const auto brand = feed.value("brand", std::string());
+        const auto vendor = detail::upper(brand);
+        const auto subtype = detail::upper(feed.value("subtype", std::string()));
+        const std::string old_preset = prev.value("preset", std::string()); // SNORCA
         std::string selected;                                                                                           // SNORCA
-        for(const auto& p:compatible_presets)if(p.at("name")==old_preset&&p.at("material")==material)selected=old_preset; // SNORCA
-        if(selected.empty()&&!material.empty())for(const auto& p:compatible_presets)if(p.at("material")==material){selected=p.at("name");if(p.value("generic",false))break;} // SNORCA
+        int branded_rank = 0;
+        for (const auto &preset : compatible_presets) {
+            if (vendor.empty() || vendor == "GENERIC" || material.empty() || preset.at("material") != material ||
+                preset.value("vendor", std::string()) != vendor)
+                continue;
+            const auto candidates = preset.find("nozzles");
+            if (candidates != preset.end() && std::find(candidates->begin(), candidates->end(), feed.at("nozzle")) == candidates->end())
+                continue;
+            const auto name = preset.at("name").get<std::string>();
+            const auto upper_name = detail::upper(name);
+            const bool exact_subtype = subtype.size() >= 3 && subtype != "NONE" && subtype != "STANDARD" &&
+                subtype != material && upper_name.find(subtype) != std::string::npos;
+            const bool general_family = upper_name.find(" GENERAL " + material + " FAMILY") != std::string::npos;
+            const bool branded_default = upper_name.substr(0, upper_name.find(" @")) == vendor + " " + material;
+            const int rank = exact_subtype ? 4 : general_family ? 3 : branded_default ? 2 : name == old_preset ? 1 : 0;
+            if (rank > branded_rank) {
+                branded_rank = rank;
+                selected = name;
+            }
+        }
+        if(selected.empty())for(const auto& p:compatible_presets)if(p.value("visible",true)&&p.at("name")==old_preset&&p.at("material")==material)selected=old_preset;
+        if(selected.empty()&&!material.empty())for(const auto& p:compatible_presets)if(p.value("visible",true)&&p.at("material")==material){selected=p.at("name");if(p.value("generic",false))break;}
         if(selected.empty()){                                                                                           // SNORCA
             if(!material.empty())throw std::invalid_argument("No compatible local "+material+" filament preset. Previous palette retained."); // SNORCA
-            selected=!old_preset.empty()?old_preset:(compatible_presets.empty()?std::string():compatible_presets[0].at("name").get<std::string>()); // SNORCA
-            warnings.push_back(feed.at("label").get<std::string>()+": material unidentified; preset is only a placeholder."); } // SNORCA
+            selected=old_preset;
+            if(selected.empty())for(const auto& p:compatible_presets)if(p.value("visible",true)){selected=p.at("name");break;}
+            if (available)
+                warnings.push_back(feed.at("label").get<std::string>()+": material unidentified; preset is only a placeholder.");
+        } // SNORCA
         if(selected.empty())throw std::invalid_argument("No compatible local filament presets are available.");        // SNORCA
-        const std::string color=feed.at("color").is_string()?feed.at("color").get<std::string>():prev.value("color",std::string("#808080")); // SNORCA
+        const std::string color = available && feed.at("color").is_string() ? feed.at("color").get<std::string>()
+                                                                          : prev.value("color", std::string("#808080")); // SNORCA
         J row={{"preset",selected},{"color",color},{"nozzle",feed.at("nozzle")},{"mms_slot",feed.at("mms_slot")}};    // SNORCA
         J ownership={{"key",key},{"printer_id",inventory.at("printer_id")},{"host",inventory.at("host")},              // SNORCA
-            {"label",feed.at("label")},{"material",material},{"source",feed.at("source")},                              // SNORCA
+            {"label",feed.at("label")},{"material",material},{"brand",brand},{"source",feed.at("source")},
             {"identified",feed.at("identified")},{"available",feed.at("available")},                                    // SNORCA
             {"user_override",feed.at("user_override")},{"color",color},{"preset",selected},                             // SNORCA
             {"nozzle",feed.at("nozzle")},{"mms_slot",feed.at("mms_slot")}};                                            // SNORCA
         // Auto only: a field the user changed after the last import stays, and the import baseline stays with it,   SNORCA
         // so the next poll still sees it as a hand edit (same rule as plan() above).                                 SNORCA
-        if(!manual&&at>=0&&!own.empty()){                                                                               // SNORCA
+        if(!manual&&!match_imported_colors&&at>=0&&!own.empty()){                                                       // SNORCA
             bool edited=false;                                                                                          // SNORCA
             if(prev.value("color",std::string())!=own.value("color",std::string())){row["color"]=prev.at("color");ownership["color"]=own.at("color");edited=true;} // SNORCA
             if(old_preset!=own.value("preset",std::string())){row["preset"]=old_preset;ownership["preset"]=own.at("preset");edited=true;} // SNORCA
@@ -214,14 +269,96 @@ inline nlohmann::json plan_exact(const nlohmann::json& current, const nlohmann::
         // by the same rule as the round button. Only when the caller asks (keep_used_not_on_printer: an automatic   SNORCA
         // move was just undone with Edit > Undo) does Auto keep the row at the end as before.                        SNORCA
         if(!manual&&current.value("keep_used_not_on_printer",false)){remap[i]=int(rows.size());rows.push_back(old[i]);kept.push_back(what);continue;} // SNORCA
-        // Used row not on this printer (round button and Auto): same material, closest colour; else closest colour.  SNORCA
-        const std::string m=detail::upper(material_of(old[i].value("preset",std::string())));                           // SNORCA
+        // Match a used row to this printer's inventory.
+        const std::string m=detail::upper(material_of(i));
         int a[3],b[3]; const bool ca=SnorcaColour::parse(old[i].value("color",std::string()),a);                          // SNORCA
         int best=-1; double bd=1e18; bool same_material=false;                                                          // SNORCA
+        // A used row from this printer's now-unavailable feed cannot remain
+        // printable on that feed. Reuse the project import color matcher.
+        const std::string source_key = own.value("key", std::string());
+        const bool unavailable_source = !source_key.empty() &&
+            own.value("printer_id", std::string()) == inventory.at("printer_id") &&
+            std::any_of(feeds.begin(), feeds.end(), [&](const J &feed) {
+                return feed.at("key") == source_key && !feed.at("available").get<bool>();
+            });
+        if (match_imported_colors || unavailable_source) {
+            // CIEDE2000 can rank grey or white ahead of another shade of a saturated color.
+            // Compare hue families, also allowing close shades such as white and cream.
+            double source[3]{};
+            if (ca)
+                SnorcaColour::lab(a, source);
+            const double source_chroma = std::hypot(source[1], source[2]);
+            constexpr double neutral_chroma = 12.0;
+            constexpr double close_shade_distance = 18.0;
+            int black = -1, nearest = -1;
+            double black_distance = 1e18, nearest_distance = 1e18;
+            for (size_t k = 0; k < printer_rows; ++k) {
+                const auto &feed = feeds[k];
+                const auto material = feed.value("material", std::string());
+                const auto &color = feed.at("color");
+                if (!feed.at("available").get<bool>() || material.empty() || !color.is_string() ||
+                    !SnorcaColour::parse(color.get_ref<const std::string &>(), b))
+                    continue;
+                const int black_rgb[3]{0, 0, 0};
+                const double from_black = SnorcaColour::delta_e(black_rgb, b);
+                if (*std::max_element(b, b + 3) <= 32 && from_black < black_distance) {
+                    black = int(k);
+                    black_distance = from_black;
+                }
+                if (!ca)
+                    continue;
+                const double distance = SnorcaColour::delta_e(a, b);
+                if (distance < nearest_distance) {
+                    nearest = int(k);
+                    nearest_distance = distance;
+                }
+                double target[3];
+                SnorcaColour::lab(b, target);
+                const double target_chroma = std::hypot(target[1], target[2]);
+                const bool same_hue = source_chroma >= neutral_chroma && target_chroma >= neutral_chroma &&
+                    source[1] * target[1] + source[2] * target[2] >= 0.5 * source_chroma * target_chroma;
+                const bool same_candidate_material = material == m;
+                if ((same_hue || distance <= close_shade_distance) &&
+                    (best < 0 || (same_candidate_material && !same_material) ||
+                     (same_candidate_material == same_material && distance < bd))) {
+                    best = int(k);
+                    bd = distance;
+                    same_material = same_candidate_material;
+                }
+            }
+            if (best < 0) {
+                best = black >= 0 ? black : nearest;
+                same_material = best >= 0 && rows[best].at("ownership").value("material", std::string()) == m;
+            }
+        } else {
         for(int pass=0;pass<2&&best<0;++pass)for(size_t k=0;k<printer_rows;++k){                                        // SNORCA
+            if (!rows[k].at("ownership").at("available").get<bool>())
+                continue;
+            if (protect_project_colors) {
+                const auto source_color = old[i].value("color", std::string());
+                const auto target_color = rows[k].value("color", std::string());
+                const auto spool_color = rows[k].at("ownership").value("color", std::string());
+                if (!exact_color(source_color, spool_color) || !exact_color(source_color, target_color))
+                    continue;
+            }
             if(pass==0&&(m.empty()||rows[k].at("ownership").value("material",std::string())!=m))continue;              // SNORCA
             const double d=ca&&SnorcaColour::parse(rows[k].value("color",std::string()),b)?SnorcaColour::delta_e(a,b):1e9; // SNORCA
             if(d<bd){bd=d;best=int(k);same_material=pass==0;}}                                                          // SNORCA
+            if (protect_project_colors && (!same_material || bd > 1e-6))
+                best = -1;
+        }
+        if (best < 0) {
+            remap[i] = int(rows.size());
+            auto retained = old[i];
+            if (protect_project_colors || match_imported_colors) {
+                retained["ownership"] = J::object();
+                retained["nozzle"] = -1;
+                retained["mms_slot"] = 0;
+            }
+            rows.push_back(std::move(retained));
+            kept.push_back(what);
+            continue;
+        }
         remap[i]=best; removed.push_back(what);                                                                         // SNORCA
         // SNORCA (2026-11-13): plain names for the status line, e.g. "8 Black PLA -> 2 Black PLA".                       SNORCA
         auto plain=[](const std::string& hex,const std::string& mat){const std::string n=SnorcaColour::name(hex);         // SNORCA

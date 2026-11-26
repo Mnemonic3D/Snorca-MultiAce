@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <locale>
 #include <exception>
 #include <boost/format.hpp>
 #include <boost/log/trivial.hpp>
@@ -125,7 +126,25 @@ std::vector<int> snorca_min_cost(const std::vector<std::vector<double>> &a)     
     for (int j = 1; j <= m; ++j) if (p[j] > 0) col[p[j] - 1] = j - 1;                                         // SNORCA
     return col;                                                                                               // SNORCA
 }                                                                                                             // SNORCA
-std::string snorca_err(const std::string &body, const std::string &error, unsigned status)                      // SNORCA
+// The slicer footer is indexed by filament slot, including zeroes for gaps.
+std::set<int> snorca_used_filaments(const std::string& usage)
+{
+    std::set<int>      used;
+    std::istringstream fields(usage);
+    std::string        field;
+    for (int slot = 0; std::getline(fields, field, ','); ++slot) {
+        std::istringstream number(field);
+        number.imbue(std::locale::classic());
+        double length = 0;
+        if (!(number >> length) || !std::isfinite(length) || length < 0 || !(number >> std::ws).eof())
+            return {};
+        if (length > 0)
+            used.insert(slot);
+    }
+    return used;
+}
+
+std::string snorca_err(const std::string& body, const std::string& error, unsigned status)                    // SNORCA
 {                                                                                                             // SNORCA
     std::string d;                                                                                            // SNORCA
     try { auto j = nlohmann::json::parse(body); if (j.contains("detail")) d = j["detail"].is_string() ? j["detail"].get<std::string>() : j["detail"].dump(); } catch (...) {} // SNORCA
@@ -138,16 +157,75 @@ std::string snorca_err(const std::string &body, const std::string &error, unsign
 
 bool MultiACE::snorca_assign_head_targets(const std::string &report_json, int base,                             // SNORCA
                                         std::map<std::string, std::string> &asn, std::string &reason, std::string &summary, // SNORCA
-                                        std::vector<std::vector<std::string>> *plan)                  // SNORCA
+                                        std::vector<std::vector<std::string>> *plan, const std::set<int>& used_filaments) // SNORCA
 {                                                                                                             // SNORCA
     using nlohmann::json;                                                                                     // SNORCA
     json r;                                                                                                   // SNORCA
     try { r = json::parse(report_json); } catch (...) { reason = "multiACE sent a plan the slicer cannot read."; return false; } // SNORCA
-    if (!r.is_object() || !r.value("head_mode", false)) {                                                     // SNORCA
-        reason = "multiACE is not in head mode on this printer; the automatic start is only built for head mode."; return false; } // SNORCA
-    const json cols = r.value("slicer_colors", json::array()), tgts = r.value("targets", json::array());     // SNORCA
-    if (!cols.is_array() || cols.empty()) { reason = "multiACE found no filament colours in the file."; return false; } // SNORCA
-    if (!tgts.is_array()) { reason = "multiACE sent no spool list."; return false; }                         // SNORCA
+    if (!r.is_object()) {
+        reason = "multiACE sent an invalid print plan.";
+        return false;
+    }
+    if (!r.value("head_mode", false)) {
+        // Classic multi reports live_slots, not head-mode targets. Each unit's
+        // slot N feeds nozzle N; its synthetic tool number is unit * 4 + N.
+        if (!r.contains("plans") || !r["plans"].is_object() || !r["plans"].contains("slicer") || !r.contains("live_slots") ||
+            !r["live_slots"].is_array()) {
+            reason = "multiACE did not provide a multi-mode loadout plan; check its preflight page.";
+            return false;
+        }
+        json          targets = json::array();
+        std::set<int> seen;
+        for (const auto& slot : r["live_slots"]) {
+            if (!slot.is_object() || !slot.contains("ace") || !slot["ace"].is_number_integer() || !slot.contains("slot") ||
+                !slot["slot"].is_number_integer() || slot["ace"] < 0 || slot["ace"] > 3 || slot["slot"] < 0 || slot["slot"] > 3) {
+                reason = "multiACE sent an invalid multi-mode spool address.";
+                return false;
+            }
+            const int unit = slot["ace"].get<int>(), lane = slot["slot"].get<int>();
+            const int tool = unit * 4 + lane;
+            if (!seen.insert(tool).second) {
+                reason = "multiACE sent a duplicate spool address.";
+                return false;
+            }
+            json target    = slot;
+            target["id"]   = std::to_string(tool);
+            target["kind"] = "ace";
+            target["head"] = lane;
+            targets.push_back(std::move(target));
+        }
+        r["targets"] = std::move(targets);
+    }
+    json cols = r.value("slicer_colors", json::array());
+    const json tgts            = r.value("targets", json::array());
+    bool       filtered_unused = false;
+    if (!used_filaments.empty() && cols.is_array()) {
+        json          active = json::array();
+        std::set<int> reported;
+        for (const auto& col : cols) {
+            if (!col.is_object() || !col.contains("t") || !col["t"].is_number_integer()) {
+                reason = "multiACE sent an invalid filament index.";
+                return false;
+            }
+            const int slot = col["t"].get<int>();
+            if (used_filaments.count(slot) && reported.insert(slot).second)
+                active.push_back(col);
+        }
+        if (reported != used_filaments) {
+            reason = "multiACE did not report every filament used in the sliced job.";
+            return false;
+        }
+        filtered_unused = active.size() < cols.size();
+        cols            = std::move(active);
+    }
+    if (!cols.is_array() || cols.empty()) {
+        reason = "multiACE found no filament colours in the file.";
+        return false;
+    } // SNORCA
+    if (!tgts.is_array()) {
+        reason = "multiACE sent no spool list.";
+        return false;
+    } // SNORCA
     // Mixed nozzle sizes: a filament may only go to a head carrying the diameter it was sliced for (as the page). // SNORCA
     const bool mixed = r.value("forca", false) && r.value("nozzles_mixed", false);                           // SNORCA
     json hn = r.value("head_nozzles", json::object()); if (!hn.is_object() || hn.empty()) hn = r.value("nozzles", json::object()); // SNORCA
@@ -205,7 +283,7 @@ bool MultiACE::snorca_assign_head_targets(const std::string &report_json, int ba
                                    where, snorca_upper(g.value("material", "")), snorca_hex(g.value("color", ""))}); // SNORCA
     }                                                                                                         // SNORCA
     const json miss = r.value("missing_materials", json::array());                                           // SNORCA
-    if (miss.is_array() && !miss.empty()) { reason = "multiACE reports a missing material: " + miss.dump() + "."; return false; } // SNORCA
+    if (!filtered_unused && miss.is_array() && !miss.empty()) { reason = "multiACE reports a missing material: " + miss.dump() + "."; return false; } // SNORCA
     return true;                                                                                              // SNORCA
 }                                                                                                             // SNORCA
 
@@ -495,6 +573,7 @@ int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_f
         return ok; };                                                                                         // SNORCA
     auto printer_state = [&](std::string &err) { json st; return get("multiace/api/state", st, err) ? st.value("printer_state", std::string("?")) : std::string(); }; // SNORCA
     std::string err;                                                                                          // SNORCA
+    std::set<int> used_filaments;
     {   // What the job needs, read from the G-code itself (used tools + header colour/type lists).          // SNORCA
         std::ifstream in(up.source_path.string()); std::string l; std::set<int> used;                       // SNORCA
         std::vector<std::string> colours, types;                                                              // SNORCA
@@ -506,11 +585,14 @@ int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_f
             if (!l.empty() && l.back() == '\r') l.pop_back();                                                // SNORCA
             if (l.empty() || (l[0] != 'T' && l[0] != ';')) continue;                                          // SNORCA
             if (l[0] == 'T') { if (std::regex_match(l, m, t_re)) used.insert(std::stoi(m[1])); continue; }   // SNORCA
+            const std::string usage_prefix = "; filament used [mm] = ";
+            if (l.compare(0, usage_prefix.size(), usage_prefix) == 0)
+                used_filaments = snorca_used_filaments(l.substr(usage_prefix.size()));
             if (l.compare(0, 11, "; filament_") != 0) continue;                                               // SNORCA
             if (std::regex_match(l, m, c_re)) colours = split(m[1]);                                          // SNORCA
             else if (std::regex_match(l, m, y_re)) types = split(m[1]);                                       // SNORCA
         }                                                                                                     // SNORCA
-        for (int t : used) m_snorca_outcome.needs.push_back({"Filament " + std::to_string(t + 1),              // SNORCA
+        for (int t : used_filaments.empty() ? used : used_filaments) m_snorca_outcome.needs.push_back({"Filament " + std::to_string(t + 1),              // SNORCA
             t < (int) types.size() ? snorca_upper(types[t]) : "?", t < (int) colours.size() ? snorca_hex(colours[t]) : "?"}); // SNORCA
     }                                                                                                         // SNORCA
     json st;                                                                                                  // SNORCA
@@ -552,7 +634,7 @@ int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_f
         }                                                                                                     // SNORCA
     } catch (...) {}                                                                                          // SNORCA
     std::map<std::string, std::string> asn;                                                                   // SNORCA
-    if (!snorca_assign_head_targets(rep_body, base, asn, reason, m_snorca_outcome.summary, &m_snorca_outcome.plan)) { reason = "Not started: " + reason; return 0; } // SNORCA
+    if (!snorca_assign_head_targets(rep_body, base, asn, reason, m_snorca_outcome.summary, &m_snorca_outcome.plan, used_filaments)) { reason = "Not started: " + reason; return 0; } // SNORCA
     json rep = json::parse(rep_body);                                                                         // SNORCA
     const std::string token = rep.contains("token") && rep["token"].is_string() ? rep["token"].get<std::string>() : std::string(); // SNORCA
     if (token.empty()) { reason = "multiACE sent no job token, so nothing was started."; return 0; }          // SNORCA
@@ -562,9 +644,25 @@ int MultiACE::snorca_auto_start(const PrintHostUpload &up, ProgressFn progress_f
     const std::string bed_choice = snorca_choice(up, "snorca_print_bed_calibration");                           // SNORCA
     const bool bed_mesh = bed_choice == "area" || bed_choice == "full";                                       // SNORCA
     const bool flow_cal = snorca_choice(up, "snorca_print_flow_calibration") == "1";                            // SNORCA
-    const json body = {{"token", token}, {"mode", "head"}, {"head_plan", "loadout"}, {"head_assignment", asn}, // SNORCA
+    json body = {{"token", token}, {"mode", "head"}, {"head_plan", "loadout"}, {"head_assignment", asn}, // SNORCA
                        {"head_copies", json::object()}, {"bed_mesh", bed_mesh}, {"camera", false}, {"flow_cal", flow_cal}}; // SNORCA
-    BOOST_LOG_TRIVIAL(warning) << "multiACE: print options bed=" << (bed_choice.empty() ? "(not asked)" : bed_choice) << " bed_mesh=" << bed_mesh << " flow_cal=" << flow_cal; // SNORCA
+    if (!rep.value("head_mode", false)) {
+        const std::string printer_mode = st.value("mode", std::string());
+        if (printer_mode != "multi" && printer_mode != "single") {
+            reason = "Printer mode and multiACE print plan disagree; sync the printer and try again.";
+            return 0;
+        }
+        json remap = json::object();
+        for (const auto& entry : asn)
+            remap[entry.first] = std::stoi(entry.second); // Validated synthetic tool 0..15 above.
+        body.erase("head_plan");
+        body.erase("head_assignment");
+        body.erase("head_copies");
+        body["mode"]  = "slicer";
+        body["remap"] = std::move(remap);
+    }
+    BOOST_LOG_TRIVIAL(warning) << "multiACE: print options bed=" << (bed_choice.empty() ? "(not asked)" : bed_choice)
+                               << " bed_mesh=" << bed_mesh << " flow_cal=" << flow_cal;                       // SNORCA
     std::string job_id; bool start_ok = false;                                                                // SNORCA
     auto sp = Http::post(make_url("multiace/api/preflight/print")); set_auth(sp);                             // SNORCA
     sp.header("Content-Type", "application/json").set_post_body(body.dump()).timeout_connect(5).timeout_max(120) // SNORCA
@@ -727,19 +825,23 @@ MultiACE::TopologyReport MultiACE::fetch_topology(std::string host)
         // Which heads a unit drives. ace_heads is the list; the legacy single-ACE field
         // ace_head is the same fallback head_maps() itself applies. head_ace is identity-
         // padded outside head mode and deliberately never read here.
-        std::vector<int> ace_heads;
-        if (ctx.contains("ace_heads") && ctx["ace_heads"].is_array())
-            for (const auto &v : ctx["ace_heads"])
-                ace_heads.push_back(v.get<int>());
-        if (ace_heads.empty() && r.mode == "head" && ctx.contains("ace_head"))
-            ace_heads.push_back(ctx["ace_head"].get<int>());
-        int head_n = 4;
-        for (int h : ace_heads)
-            head_n = std::max(head_n, h + 1);
-        r.ace_driven_heads.assign(size_t(head_n), false);
-        for (int h : ace_heads)
-            if (h >= 0)
-                r.ace_driven_heads[size_t(h)] = true;
+        r.ace_driven_heads.assign(4, false);
+        if (r.mode == "head") {
+            auto mark_head = [&](const nlohmann::json& value) {
+                if (!value.is_number_integer() || value < 0 || value > 3)
+                    throw std::invalid_argument("invalid ACE-driven head");
+                r.ace_driven_heads[value.get<int>()] = true;
+            };
+            if (ctx.contains("ace_heads")) {
+                const auto& heads = ctx.at("ace_heads");
+                if (!heads.is_array() || heads.size() > 4)
+                    throw std::invalid_argument("invalid ACE-driven head list");
+                for (const auto& head : heads)
+                    mark_head(head);
+            } else if (ctx.contains("ace_head")) {
+                mark_head(ctx.at("ace_head"));
+            }
+        }
 
         // Supply, head-indexed, read off Klipper's extruder objects. String keys.
         if (ctx.contains("head_nozzles") && ctx["head_nozzles"].is_object())
@@ -752,14 +854,18 @@ MultiACE::TopologyReport MultiACE::fetch_topology(std::string host)
                 r.head_nozzles[size_t(idx)] = el.value().get<double>();
             }
 
-        // Units seen. live_slots drops empty and non-identified slots, so this is a
-        // LOWER BOUND on the connected count - the caller's dialog says so.
-        std::set<int> units;
-        if (j.contains("live_slots") && j["live_slots"].is_array())
-            for (const auto &s : j["live_slots"])
-                if (s.contains("ace") && s["ace"].is_number())
-                    units.insert(s["ace"].get<int>());
-        r.units_seen = int(units.size());
+        // Unlike live_slots, connected_aces includes empty and unlabelled units.
+        if (ctx.contains("connected_aces") && !ctx.at("connected_aces").is_null()) {
+            const auto& connected = ctx.at("connected_aces");
+            if (!connected.is_array() || connected.size() > 4)
+                throw std::invalid_argument("invalid connected unit list");
+            std::set<int> units;
+            for (const auto& unit : connected) {
+                if (!unit.is_number_integer() || unit < 0 || unit > 3 || !units.insert(unit.get<int>()).second)
+                    throw std::invalid_argument("invalid connected unit index");
+            }
+            r.units_seen = int(units.size());
+        }
 
         r.ok = true;
     } catch (const std::exception &e) {

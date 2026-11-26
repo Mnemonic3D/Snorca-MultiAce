@@ -27,6 +27,7 @@ Unicode true
 ; 64-bit app: use PROGRAMFILES64 so default path is C:\Program Files\FOrcaSlicer, not (x86)
 !define INSTALL_DIR_RUNTIME "$PROGRAMFILES64\Snorca MultiAce"
 InstallDir "${INSTALL_DIR_RUNTIME}"
+InstallDirRegKey HKLM "${PRODUCT_INSTALL_KEY}" "InstallPath"
 
 !ifndef OUTPUT_FILE
     !define OUTPUT_FILE "Snorca_MultiAce_Windows_Installer_V${VERSION}.exe"
@@ -103,8 +104,6 @@ VIAddVersionKey "OriginalFilename" "${OUTPUT_FILE}"
 
 LangString UNINSTALL_CONFIRM_TEXT ${LANG_SIMPCHINESE} "确定要彻底卸载 ${PRODUCT_DISPLAY_NAME} 及其全部组件吗？"
 LangString UNINSTALL_CONFIRM_TEXT ${LANG_ENGLISH} "Are you sure you want to completely uninstall ${PRODUCT_DISPLAY_NAME} and all of its components?"
-LangString UNINSTALLER_MISSING_TEXT ${LANG_SIMPCHINESE} "检测到本机已安装 ${PRODUCT_NAME}，但找不到卸载程序。$\r$\n$\r$\n卸载路径：$R8$\r$\n安装目录：$INSTDIR$\r$\n$\r$\n请先手动删除旧安装目录后再运行本安装程序。"
-LangString UNINSTALLER_MISSING_TEXT ${LANG_ENGLISH} "An existing ${PRODUCT_NAME} installation was found, but the uninstaller is missing.$\r$\n$\r$\nUninstaller: $R8$\r$\nInstall dir: $INSTDIR$\r$\n$\r$\nRemove the old folder manually, then run this installer again."
 
 Name "${PRODUCT_DISPLAY_NAME}"
 OutFile "${OUTPUT_FILE}"
@@ -120,11 +119,18 @@ Section "Main program" SecMain
     DetailPrint "Target dir: $INSTDIR"
     
     DetailPrint "Copying files..."
+    SetOverwrite on
+    ClearErrors
 
     ; PACK_SOURCE_DIR = compile time only. At runtime this File extracts from embedded payload to $INSTDIR.
     File /r /x "*.pdb" /x "*.ilk" /x "*.exp" /x "*.lib" /x "*.obj" /x "*.idb" /x "*.tlog" /x "*.h" /x "*.hpp" /x "*.c" /x "*.cpp" /x "*.cxx" /x "*.cc" /x "*.vcxproj" /x "*.vcxproj.filters" /x "*.sln" /x "*.cmake" /x "*.py" /x "*.md" /x "*.vcxproj.user" /x "CMakeFiles" /x "RelWithDebInfo" /x "Debug" /x "MinSizeRel" /x ".vs" /x "vcpkg_installed" /x "*.dir" /x "include\*" /x "lib\*" "${PACK_SOURCE_DIR}\*.*"
 
+    IfErrors extract_error
     IfFileExists "$INSTDIR\FOrcaSlicer.exe" 0 extract_error
+
+    ; Remove only known obsolete application files. Portable data_dir and
+    ; files placed alongside the app may belong to the user.
+    Call RemoveObsoleteFiles
     
     DetailPrint "Creating uninstaller..."
     WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -159,7 +165,8 @@ Section "Main program" SecMain
     Goto end_section
     
     extract_error:
-        MessageBox MB_OK|MB_ICONSTOP "Installation failed: FOrcaSlicer.exe was not found in the package. The installer may be corrupted."
+        SetErrorLevel 8
+        MessageBox MB_OK|MB_ICONSTOP "Some application files could not be updated. Close the slicer and retry setup." /SD IDOK
         Abort
     
     end_section:
@@ -233,10 +240,6 @@ Function EnsureSnapmakerNotRunning
     snapmaker_check_loop:
         nsExec::Exec 'cmd.exe /c tasklist /FI "IMAGENAME eq FOrcaSlicer.exe" 2>nul | find /i "FOrcaSlicer.exe" >nul'
         Pop $0
-        IntCmp $0 0 snapmaker_in_use snapmaker_try_legacy snapmaker_try_legacy
-    snapmaker_try_legacy:
-        nsExec::Exec 'cmd.exe /c tasklist /FI "IMAGENAME eq FOrcaSlicer.exe" 2>nul | find /i "FOrcaSlicer.exe" >nul'
-        Pop $0
         IntCmp $0 0 snapmaker_in_use snapmaker_idle snapmaker_idle
     snapmaker_in_use:
         IfSilent snapmaker_silent snapmaker_prompt
@@ -249,107 +252,24 @@ Function EnsureSnapmakerNotRunning
     snapmaker_idle:
 FunctionEnd
 
-; Sets $R9 to a usable Uninstall.exe path. Aborts if an old install exists without an uninstaller.
-Function FindExistingUninstaller
-    StrCpy $R9 ""
-    ; Snorca: only our own uninstall key; a Snapmaker Orca install is a different product and is left alone.
-    ReadRegStr $R8 HKLM "${PRODUCT_UNINST_KEY}" "UninstallString"
-    StrCmp $R8 "" 0 find_uninst_have_str
-    ReadRegStr $R8 HKCU "${PRODUCT_UNINST_KEY}" "UninstallString"
-    StrCmp $R8 "" 0 find_uninst_have_str
-    IfFileExists "$INSTDIR\Uninstall.exe" 0 find_uninst_check_app
-    StrCpy $R8 "$INSTDIR\Uninstall.exe"
-    Goto find_uninst_have_str
-    find_uninst_check_app:
-        IfFileExists "$INSTDIR\FOrcaSlicer.exe" find_uninst_missing find_uninst_done
-    find_uninst_have_str:
-        StrCpy $0 $R8 1 0
-        StrCmp $0 "$\"" 0 find_uninst_check_last
-        StrCpy $R8 $R8 "" 1
-    find_uninst_check_last:
-        StrCpy $0 $R8 1 -1
-        StrCmp $0 "$\"" 0 find_uninst_exists
-        StrCpy $R8 $R8 -1
-    find_uninst_exists:
-        IfFileExists "$R8" 0 find_uninst_missing
-        StrCpy $R9 $R8
-        Goto find_uninst_done
-    find_uninst_missing:
-        MessageBox MB_OK|MB_ICONSTOP "$(UNINSTALLER_MISSING_TEXT)"
-        Abort
-    find_uninst_done:
-FunctionEnd
-
-; Sets $R7 to the already-installed version from ARP DisplayVersion / Version.
-Function ReadInstalledVersion
-    StrCpy $R7 ""
-    SetRegView 64
-    Call ReadInstalledVersionFromView
-    StrCmp $R7 "" 0 read_ver_strip
-    SetRegView 32
-    Call ReadInstalledVersionFromView
-    read_ver_strip:
-        SetRegView 32
-        StrCmp $R7 "" read_ver_done
-        StrCpy $0 $R7 1
-        StrCmp $0 "V" read_ver_strip_one
-        StrCmp $0 "v" read_ver_strip_one read_ver_done
-    read_ver_strip_one:
-        StrCpy $R7 $R7 "" 1
-    read_ver_done:
-FunctionEnd
-
-Function ReadInstalledVersionFromView
-    ReadRegStr $R7 HKLM "${PRODUCT_UNINST_KEY}" "DisplayVersion"
-    StrCmp $R7 "" 0 read_ver_view_done
-    ReadRegStr $R7 HKCU "${PRODUCT_UNINST_KEY}" "DisplayVersion"
-    StrCmp $R7 "" 0 read_ver_view_done
-    ReadRegStr $R7 HKLM "${PRODUCT_INSTALL_KEY}" "Version"
-    StrCmp $R7 "" 0 read_ver_view_done
-    ReadRegStr $R7 HKCU "${PRODUCT_INSTALL_KEY}" "Version"
-    read_ver_view_done:
+Function RemoveObsoleteFiles
+    ; Leave linked asset directories alone during cleanup.
+    System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR") i.r0'
+    IntOp $0 $0 & 0x400
+    StrCmp $0 0 0 done
+    System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR\resources") i.r0'
+    IntOp $0 $0 & 0x400
+    StrCmp $0 0 0 done
+    System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR\resources\web") i.r0'
+    IntOp $0 $0 & 0x400
+    StrCmp $0 0 0 done
+    System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR\resources\web\flutter_web") i.r0'
+    IntOp $0 $0 & 0x400
+    StrCmp $0 0 0 done
+    Delete "$INSTDIR\resources\web\flutter_web\posthog-array.0930d984aecf936d75a80e534e55d1eb.js"
+    done:
 FunctionEnd
 
 Function .onInit
-
     Call EnsureSnapmakerNotRunning
-    Call FindExistingUninstaller
-    StrCmp $R9 "" done
-    StrCpy $R0 $R9
-    Call ReadInstalledVersion
-
-    StrCmp $R7 "" already_no_ver already_with_ver
-    already_with_ver:
-        MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-        "${PRODUCT_NAME} V$R7 is already installed.$\n$\nClick OK to uninstall the old version, or Cancel to abort." \
-        /SD IDOK IDOK uninst
-        Abort
-    already_no_ver:
-        MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-        "${PRODUCT_NAME} is already installed.$\n$\nClick OK to uninstall the old version, or Cancel to abort." \
-        /SD IDOK IDOK uninst
-        Abort
-
-    uninst:
-        ClearErrors
-        StrLen $R1 "Uninstall.exe"
-        StrCpy $R2 $R0 -$R1
-    uninst_trim_slash:
-        StrCpy $R1 $R2 1 -1
-        StrCmp $R1 "\" uninst_do_trim uninst_slash_done
-    uninst_do_trim:
-        StrCpy $R2 $R2 -1
-        Goto uninst_trim_slash
-    uninst_slash_done:
-        IfFileExists "$R0" 0 no_remove_uninstaller
-        ; /S skips the new uninstall confirm dialog during upgrade.
-        ExecWait '"$R0" /S _?=$R2' $R3
-        IfErrors no_remove_uninstaller
-        IntCmp $R3 0 done no_remove_uninstaller no_remove_uninstaller
-
-    no_remove_uninstaller:
-        MessageBox MB_OK|MB_ICONSTOP "Uninstall failed.$\nUninstaller path: $R0$\nWorking dir: $R2"
-        Abort
-
-    done:
 FunctionEnd

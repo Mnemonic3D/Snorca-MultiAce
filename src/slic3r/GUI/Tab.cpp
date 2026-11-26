@@ -4327,8 +4327,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("tree_support_branch_angle_organic", "support_settings_tree#branch-angle");
         optgroup->append_single_option_line("tree_support_angle_slow", "support_settings_tree#preferred-branch-angle");
         optgroup->append_single_option_line("tree_support_adaptive_layer_height", "support_settings_tree");
-        optgroup->append_single_option_line("tree_support_auto_brim", "support_settings_tree");
-        optgroup->append_single_option_line("tree_support_brim_width", "support_settings_tree");
 
     page = add_options_page(L("Multimaterial"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Prime tower"), L"param_tower");
@@ -7550,12 +7548,7 @@ void TabPrinter::clear_pages()
     m_reset_to_filament_color = nullptr;
 }
 
-// FOS: fetch mode / units / unit-driven heads from the supply system's preflight
-// livedata endpoint and, after showing the full picture, write them into the profile.
-// 409 means a head is set to manual - topology unavailable, manual entry stays
-// authoritative. The report's units_seen is a LOWER BOUND (units with no identified
-// spool are invisible to live_slots), which the dialog states outright: a silent
-// under-count would make the capacity guard over-block.
+// Read the printer's supply mode and apply reported topology after confirmation.
 void TabPrinter::fos_fetch_mms_topology()
 {
     std::string host;
@@ -7594,9 +7587,10 @@ void TabPrinter::fos_fetch_mms_topology()
     msg += wxString::Format("%s: %s\n", _L("Mode"), wxString::FromUTF8(rep.mode.c_str()));
     int ticked = 0;
     if (rep.mode == "multi") {
-        msg += wxString::Format("%s: %d\n", _L("Supply units seen"), rep.units_seen);
-        msg += _L("A unit with no identified spool is not counted - correct the quantity "
-                  "afterwards if more are connected.") + "\n";
+        if (rep.units_seen >= 0)
+            msg += wxString::Format("%s: %d\n", _L("Connected supply units"), rep.units_seen);
+        else
+            msg += _L("The printer did not report the connected supply unit count. The profile's count will be kept.") + "\n";
     } else if (rep.mode == "head") {
         wxString list;
         for (int h = 0; h < heads; ++h)
@@ -7645,7 +7639,7 @@ void TabPrinter::fos_fetch_mms_topology()
         topo->value = rep.mode == "multi" ? int(mmtMulti)
                     : rep.mode == "head"  ? int(mmtHead)
                                           : int(mmtNormal);
-    if (rep.mode == "multi") {
+    if (rep.mode == "multi" && rep.units_seen >= 0) {
         static_cast<ConfigOptionInt*>(new_conf.optptr("fos_mms_unit_count", true))->value = rep.units_seen;
     } else if (rep.mode == "head") {
         auto *hb = static_cast<ConfigOptionBools*>(new_conf.optptr("fos_mms_head_ace", true));

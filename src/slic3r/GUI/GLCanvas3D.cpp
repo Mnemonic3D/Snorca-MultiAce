@@ -11104,7 +11104,10 @@ void GLCanvas3D::_update_pla_petg_mix_warning()
     bool has_petg = false;
     if (wxGetApp().plater() != nullptr && wxGetApp().preset_bundle != nullptr) {
         const PresetBundle &bundle = *wxGetApp().preset_bundle;
-        if (bundle.printers.get_edited_preset().printer_technology() == ptFFF) {
+        const Preset &printer = bundle.printers.get_edited_preset();
+        if (printer.printer_technology() == ptFFF) {
+            const ConfigOption *supply = printer.config.option("mms_system");
+            const bool multiace = supply != nullptr && supply->getInt() == int(MultiMaterialSupply::mmsMultiACE);
             std::vector<std::string> filament_types;
             const size_t num_filaments = bundle.filament_presets.size();
             if (num_filaments <= 1) {
@@ -11129,16 +11132,23 @@ void GLCanvas3D::_update_pla_petg_mix_warning()
             }
             PartPlate *cur_plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
             if (cur_plate != nullptr) {
-                std::vector<int> used_filaments = cur_plate->get_extruders(true);
-                for (int filament_idx : used_filaments) {
-                    int filament_id = filament_idx - 1;
-                    if (filament_id >= 0 && filament_id < static_cast<int>(filament_types.size())) {
-                        const std::string &filament_type = filament_types[filament_id];
-                        if (filament_type == "PLA")
-                            has_pla = true;
-                        else if (filament_type == "PETG")
-                            has_petg = true;
+                const auto record_filament_type = [&](size_t slot) {
+                    if (slot < filament_types.size()) {
+                        has_pla |= filament_types[slot] == "PLA";
+                        has_petg |= filament_types[slot] == "PETG";
                     }
+                };
+                const GCodeProcessorResult *slice = cur_plate->get_slice_result();
+                if (cur_plate->is_slice_result_valid() && slice != nullptr) {
+                    // The estimate can include defaults that never extrude. A completed
+                    // slice includes actual use by the model, supports and purge paths.
+                    for (const auto &[slot, volume] : slice->print_statistics.total_volumes_per_extruder)
+                        if (volume > 0.0)
+                            record_filament_type(slot);
+                } else if (!multiace) {
+                    for (int filament : cur_plate->get_extruders(true))
+                        if (filament > 0)
+                            record_filament_type(static_cast<size_t>(filament - 1));
                 }
             }
         }

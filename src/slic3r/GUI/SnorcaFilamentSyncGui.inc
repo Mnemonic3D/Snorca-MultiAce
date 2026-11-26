@@ -30,12 +30,28 @@ static nlohmann::json snorca_palette_state()
 static nlohmann::json snorca_compatible_filaments()
 {
     using J=nlohmann::json;J result=J::array();auto* bundle=wxGetApp().preset_bundle;
+    const auto &machine = bundle->printers.get_edited_preset().config;
+    const auto *diameters = machine.option<ConfigOptionFloats>("nozzle_diameter");
+    const auto model = machine.opt_string("printer_model");
     for(const auto& preset:bundle->filaments.get_presets()){
-        if(!preset.is_compatible||!preset.is_visible)continue;
+        if(!preset.is_compatible || preset.is_project_embedded)continue;
         const auto* type=preset.config.option<ConfigOptionStrings>("filament_type");
         if(!type||type->values.empty())continue;
-        result.push_back({{"name",preset.name},{"material",SnorcaFilamentSync::detail::upper(type->values[0])},
-            {"generic",preset.name.find("Generic ")!=std::string::npos}});
+        const auto *vendor = preset.config.option<ConfigOptionStrings>("filament_vendor");
+        const auto *compatible = preset.config.option<ConfigOptionStrings>("compatible_printers");
+        const auto brand = vendor && !vendor->values.empty() ? SnorcaFilamentSync::detail::upper(vendor->values.front()) : std::string();
+        J row{{"name", preset.name}, {"material", SnorcaFilamentSync::detail::upper(type->values.front())},
+            {"vendor", brand}, {"visible", preset.is_visible}, {"generic", preset.name.find("Generic ") != std::string::npos}};
+        if (diameters && compatible && !compatible->values.empty()) {
+            auto &nozzles = row["nozzles"] = J::array();
+            for (size_t j = 0; j < diameters->values.size(); ++j) {
+                const auto expected = model + " (" + float_to_string_decimal_point(diameters->values[j], 1) + " nozzle)";
+                if (std::find(compatible->values.begin(), compatible->values.end(), expected) != compatible->values.end())
+                    nozzles.push_back(j);
+            }
+        }
+        if (preset.is_visible || (preset.is_system && !brand.empty() && brand != "GENERIC" && row.contains("nozzles")))
+            result.push_back(std::move(row));
     }
     return result;
 }
@@ -96,6 +112,8 @@ static bool snorca_verified_empty_repair(const nlohmann::json& state,const std::
 }
 void Sidebar::reset_snorca_filament_sync_baseline(bool explicit_new_project)
 {
+    if (explicit_new_project)
+        p->snorca_sync_imported_project = ObjectID();
     p->snorca_sync_empty_baseline.clear();
     try{const auto state=snorca_palette_state();
         if(state.at("has_objects").get<bool>()||!state.at("project").get<std::string>().empty())return;
@@ -280,11 +298,30 @@ static void snorca_sync_log(bool manual,const std::string& printer,const std::st
     BOOST_LOG_TRIVIAL(warning)<<"SNORCA filament sync ("<<(manual?"sync button":"auto")<<", "<<printer<<" "<<address<<"): "<<line;
 } // SNORCA
 
+void Sidebar::queue_snorca_project_color_sync()
+{
+    if (!snorca_upstream_sync_blocked())
+        return;
+    const auto &printer = wxGetApp().preset_bundle->printers.get_edited_preset();
+    const auto *host = printer.config.option<ConfigOptionString>("mms_host");
+    if (!host || host->value.empty())
+        return;
+    p->snorca_sync_imported_project = wxGetApp().plater()->model().id();
+    p->snorca_sync_last_palette.clear();
+    CallAfter([this] { sync_snorca_filaments(); });
+}
+
 void Sidebar::sync_snorca_filaments(bool manual)
 {
     using J=nlohmann::json;
     if(SnorcaPrinterConnect::refresh_device_flags())update_all_preset_comboboxes(false);
     if(p->snorca_sync_busy)return;
+    const auto &model = wxGetApp().plater()->model();
+    if (p->snorca_sync_imported_project != model.id() || model.objects.empty() || !snorca_upstream_sync_blocked())
+        p->snorca_sync_imported_project = ObjectID();
+    const bool importing_project = p->snorca_sync_imported_project.valid();
+    if (!manual && !importing_project && !p->snorca_sync_auto->GetValue())
+        return;
     // Recover missing connection metadata without asking the user to reconnect.
     wxGetApp().refresh_gateway_connection();
     SnorcaSelectedPrinter selected_printer;
@@ -329,7 +366,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
     const auto gateway=wxGetApp().gateway_service();
     const bool already_connected=use_gateway||SnorcaPrinterConnect::connected(device);
     std::shared_ptr<PrintHost> original_host;wxGetApp().get_connect_host(original_host);
-    p->snorca_sync_thread=std::thread([self,alive,generation,ticket,device,printer_config,already_connected,original_host,address,serial,preset_name,before,compatible,overrides,manual,use_gateway,gateway_generation,gateway](){
+    p->snorca_sync_thread=std::thread([self,alive,generation,ticket,device,printer_config,already_connected,original_host,address,serial,preset_name,before,compatible,overrides,manual,importing_project,use_gateway,gateway_generation,gateway](){
         auto connection=std::make_shared<SnorcaPrinterConnect::Ready>();
         if(!already_connected)*connection=SnorcaPrinterConnect::prepare(device,printer_config,alive,generation,ticket);
         J inventory;std::string error;
@@ -354,7 +391,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
             inventory=SnorcaFilamentSync::normalize(J::parse(response),serial,address,overrides);
             verify_gateway();
         }catch(const std::exception& e){error=e.what();}
-        wxGetApp().CallAfter([self,alive,generation,ticket,device,already_connected,original_host,connection,address,serial,preset_name,before,compatible,manual,inventory,error,use_gateway,gateway_generation](){
+        wxGetApp().CallAfter([self,alive,generation,ticket,device,already_connected,original_host,connection,address,serial,preset_name,before,compatible,manual,importing_project,inventory,error,use_gateway,gateway_generation](){
             if(!alive->load())return;self->p->snorca_sync_busy=false;
             std::string connection_note;
             // SNORCA: short line, full text in the tooltip, rewritten only when it changes, one log line per new result.
@@ -365,7 +402,7 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 snorca_sync_log(manual,preset_name,address,plain,details+(connection_note.empty()?std::string():"; "+connection_note));}; // SNORCA
             try{const auto current=snorca_selected_printer();if(current.address!=address||current.serial!=serial||current.preset!=preset_name||current.device.clientId!=device.clientId||current.gateway!=use_gateway||(use_gateway&&current.gateway_generation!=gateway_generation)){status("Printer changed; old color response discarded.");return;}}
             catch(const std::exception&){status("Selected printer registration changed; old color response discarded.");return;}
-            if(!manual&&!self->p->snorca_sync_auto->GetValue()){status("Auto sync paused; palette retained.");return;}
+            if(!manual&&!importing_project&&!self->p->snorca_sync_auto->GetValue()){status("Auto sync paused; palette retained.");return;}
             if(generation->load()!=ticket){status("Connection/sync request superseded; palette retained.");return;}
             if (!use_gateway) {
             std::shared_ptr<PrintHost> current_host;wxGetApp().get_connect_host(current_host);
@@ -389,58 +426,110 @@ void Sidebar::sync_snorca_filaments(bool manual)
                 auto planning_before=before;planning_before["untouched_empty_palette"]=snorca_empty_palette_fingerprint(before)==self->p->snorca_sync_empty_baseline;
                 planning_before["verified_empty_repair"]=snorca_verified_empty_repair(before,address,serial);
                 planning_before["used"]=snorca_used_rows(); // SNORCA
+                const auto &filaments = wxGetApp().preset_bundle->filaments;
+                auto &project_materials = planning_before["project_materials"];
+                project_materials = J::array();
+                for (const auto &row : before.at("rows")) {
+                    const auto *preset = filaments.find_preset(row.at("preset").get<std::string>(), false);
+                    const auto *type = preset ? preset->config.option<ConfigOptionStrings>("filament_type") : nullptr;
+                    project_materials.push_back(type && !type->values.empty()
+                        ? SnorcaFilamentSync::detail::upper(type->values.front()) : std::string());
+                }
+                const auto &objects = wxGetApp().plater()->model().objects;
+                planning_before["protect_project_colors"] = !before.at("project").get<std::string>().empty() ||
+                    planning_before.at("used").size() > 1 || std::any_of(objects.begin(), objects.end(), [](const ModelObject *object) {
+                    return std::any_of(object->volumes.begin(), object->volumes.end(), [](const ModelVolume *volume) {
+                        return !volume->mmu_segmentation_facets.empty();
+                    });
+                });
+                const bool match_imported_colors = importing_project || (manual && planning_before.at("protect_project_colors").get<bool>());
+                planning_before["match_imported_colors"] = match_imported_colors;
                 // SNORCA (2026-11-13): Auto now moves objects off rows the printer does not have. When a filament move (Auto or     SNORCA
                 // button) was undone with Edit > Undo (snorca_sync_follow_undo_redo), Auto leaves the list and the objects alone   SNORCA
                 // for this printer until another printer is selected or the sync button is pressed, so the Undo is not redone.   SNORCA
                 const std::string sel_key=preset_name+"|"+address+"|"+serial+"|"+device.clientId; // SNORCA
                 auto& sp=*self->p; bool auto_undone=false; // SNORCA
-                if(manual)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
+                if(manual||importing_project)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
                 else{ // SNORCA
                     if(!sp.snorca_sync_auto_undone_key.empty()&&sp.snorca_sync_auto_undone_key!=sel_key)sp.snorca_sync_auto_undone_key.clear(); // SNORCA
                     auto_undone=!sp.snorca_sync_auto_undone_key.empty(); // SNORCA
                     if(auto_undone)planning_before["keep_used_not_on_printer"]=true;} // SNORCA
                 // SNORCA: the pool is exactly this printer's feeds (plan_exact); plan() kept other printers' rows.
                 const auto planned=SnorcaFilamentSync::plan_exact(planning_before,inventory,compatible,manual,MAXIMUM_EXTRUDER_NUMBER); // SNORCA
+                if (importing_project)
+                    sp.snorca_sync_imported_project = ObjectID();
                 auto* bundle=wxGetApp().preset_bundle;
                 const DynamicPrintConfig old_printer=bundle->printers.get_edited_preset().config;
                 const auto* diameters=old_printer.option<ConfigOptionFloats>("nozzle_diameter");
                 if(!diameters||diameters->values.size()!=4)throw std::runtime_error("Select the four-toolhead Snapmaker U1 printer profile before syncing.");
                 // Filament sync must not rewrite the user's Toolheads/Unit settings.
+                // A retained palette row is a route. Its remembered swatch or preset cannot tell us a spool is loaded.
+                const auto& printer_feeds = inventory.at("rows");
+                size_t loaded_count = 0, ace_slot_count = 0;
+                for (const auto& feed : printer_feeds) {
+                    loaded_count += feed.at("available").get<bool>();
+                    ace_slot_count += !feed.at("ace_unit").is_null();
+                }
+                const auto plural=[](size_t n,const char* one,const char* many){return std::to_string(n)+" "+(n==1?one:many);};
+                const size_t feed_count = printer_feeds.size();
+                const bool only_ace_slots = ace_slot_count == feed_count;
+                const std::string loadout = std::to_string(loaded_count) + " loaded / " +
+                    plural(feed_count, only_ace_slots ? "slot" : "feed", only_ace_slots ? "slots" : "feeds");
+
+                const auto feed_tooltip = [](const auto& row) {
+                    const auto& own = row.at("ownership");
+                    return own.at("label").template get<std::string>() + " → nozzle " +
+                        std::to_string(row.at("nozzle").template get<int>() + 1);
+                };
+                const auto update_feed_tooltips = [self, &feed_tooltip](const auto& rows) {
+                    for (size_t i = 0; i < rows.size() && i < self->p->combos_filament.size(); ++i) {
+                        if (!rows[i].at("ownership").empty())
+                            self->p->combos_filament[i]->SetToolTip(wxString::FromUTF8(feed_tooltip(rows[i])));
+                    }
+                };
                 std::string inventory_details;
-                size_t detail_index=0;for(const auto& row:planned.at("rows")){++detail_index;const auto& own=row.at("ownership");if(own.empty())continue;
-                    inventory_details+=std::to_string(detail_index)+": "+own.value("label",std::string())+" → nozzle "+std::to_string(row.at("nozzle").get<int>()+1)+", slot "+std::to_string(row.at("mms_slot").get<int>()+1)+"\n";
+                size_t detail_index = 0;
+                for (const auto& row : planned.at("rows")) {
+                    ++detail_index;
+                    if (!row.at("ownership").empty())
+                        inventory_details += std::to_string(detail_index) + ": " + feed_tooltip(row) + "\n";
                 }
                 for(const auto& warning:planned.at("warnings"))inventory_details+="\n"+warning.get<std::string>();
-                // SNORCA: "Matches" only when the pool is exactly this printer's feeds; otherwise say what does not follow it.
-                const size_t hand_n=planned.at("hand_edited").size(),kept_n=planned.at("kept_not_on_printer").size(),printer_n=planned.at("printer_rows").get<size_t>(); // SNORCA
-                auto plural=[](size_t n,const char* one,const char* many){return std::to_string(n)+" "+(n==1?one:many);}; // SNORCA
+                // "Matches" is only accurate when the palette follows the current printer.
+                const size_t hand_n=planned.at("hand_edited").size(),kept_n=planned.at("kept_not_on_printer").size();
                 std::string result_label,result_note; // SNORCA
                 if(hand_n){result_label=plural(hand_n,"filament","filaments")+" changed by hand"; // SNORCA
                     result_note=plural(hand_n,"filament was","filaments were")+" changed by hand and "+(hand_n==1?"is":"are")+" not following the printer. Press the sync button to match the printer."; // SNORCA
                     for(const auto& h:planned.at("hand_edited"))result_note+="\n  "+h.get<std::string>();} // SNORCA
                 if(kept_n){if(result_label.empty())result_label=plural(kept_n,"used filament","used filaments")+" not on "+preset_name;else result_label=plural(hand_n+kept_n,"filament","filaments")+" not following "+preset_name; // SNORCA
-                    result_note+=std::string(result_note.empty()?"":"\n")+plural(kept_n,"filament is","filaments are")+" used by objects but not loaded on "+preset_name+"; kept at the end of the list. Press the sync button to move those objects to the closest printer filament."; // SNORCA
+                    result_note+=std::string(result_note.empty()?"":"\n")+plural(kept_n,"filament is","filaments are")+" used by objects and kept at the end of the list. Load matching spools and sync again, or assign the filaments in the nozzle map.";
                     for(const auto& k:planned.at("kept_not_on_printer"))result_note+="\n  "+k.get<std::string>();} // SNORCA
                 // SNORCA (2026-11-13): Auto moved objects off rows the printer does not have; say what moved, in one short line.
                 const size_t moved_n=planned.at("moved").size(); // SNORCA
-                if(!manual&&moved_n){std::string pairs; // SNORCA
+                if(match_imported_colors&&moved_n&&kept_n==0){
+                    result_label="Matched "+plural(moved_n,"project filament","project filaments")+" to "+preset_name;
+                    result_note="Project colors were matched to loaded spools. Check the new assignments in Preview.";
+                }
+                else if(!match_imported_colors&&!manual&&moved_n){std::string pairs; // SNORCA
                     for(const auto& m:planned.at("moved"))pairs+=(pairs.empty()?"":", ")+std::to_string(m.at("from").get<int>())+" "+m.value("from_name",std::string())+" → "+std::to_string(m.at("to").get<int>())+" "+m.value("to_name",std::string()); // SNORCA
                     result_label="Moved "+plural(moved_n,"object filament","object filaments")+" to match "+preset_name+": "+pairs; // SNORCA
                     result_note=plural(moved_n,"filament","filaments")+" used by objects "+(moved_n==1?"is":"are")+" not loaded on "+preset_name+"; Auto moved those objects to the printer filament of the same material with the closest colour (else the closest colour)."+(result_note.empty()?std::string():"\n"+result_note);} // SNORCA
                 for(const auto& r:planned.at("removed"))inventory_details+="\nRemoved: "+r.get<std::string>(); // SNORCA
-                for(const auto& m:planned.at("moved"))inventory_details+="\nObjects on filament "+std::to_string(m.at("from").get<int>())+" moved to "+std::to_string(m.at("to").get<int>())+(m.at("same_material").get<bool>()?" (same material, closest colour)":" (closest colour, other material)"); // SNORCA
+                for(const auto& m:planned.at("moved"))inventory_details+="\nObjects on filament "+std::to_string(m.at("from").get<int>())+" moved to "+std::to_string(m.at("to").get<int>())+(m.at("same_material").get<bool>()?" (same material)":" (different material)");
                 if(auto_undone&&planned.at("rows")!=before.at("rows")){ // SNORCA (2026-11-13): an undone move is left as it is
                     std::string note="The last filament move was undone with Edit > Undo, so Auto leaves the filament list and the objects as they are until another printer is selected or the sync button is pressed."; // SNORCA
                     for(const auto& k:planned.at("kept_not_on_printer"))note+="\nUsed by objects, not on "+preset_name+": "+k.get<std::string>(); // SNORCA
                     status("Filament move undone; press sync to match "+preset_name,note);return;} // SNORCA
                 if(planned.at("rows")==before.at("rows")){ // SNORCA
-                    if(result_label.empty())result_label="Matches "+preset_name+" ("+plural(printer_n,"filament","filaments")+")"; // SNORCA
+                    update_feed_tooltips(planned.at("rows"));
+                    if(result_label.empty())result_label="Matches "+preset_name+" ("+loadout+")";
                     status(result_label,(result_note.empty()?std::string():result_note+"\n")+inventory_details);return;} // SNORCA
                 const DynamicPrintConfig old_config=bundle->project_config;
                 const auto old_presets=bundle->filament_presets;const auto old_multicolor=bundle->ams_multi_color_filment;
                 wxGetApp().plater()->take_snapshot("Sync printer colors");
                 const size_t snapshot_time=wxGetApp().plater()->undo_redo_stack_main().active_snapshot_time(); // SNORCA (2026-11-13)
                 std::vector<std::function<void()>> model_undo; // SNORCA
+                std::vector<std::string> revealed_presets;
                 const auto row_remap=planned.at("remap").get<std::vector<int>>(); // SNORCA
                 SnorcaMixedRemap mixed; // SNORCA (2026-11-14)
                 SnorcaQuietGradients quiet_gradients; // SNORCA: no auto-gradient question during the sync
@@ -464,7 +553,13 @@ void Sidebar::sync_snorca_filaments(bool manual)
                             mc[j]=omc&&size_t(from[j])<omc->values.size()?omc->values[from[j]]:colors[j];md[j]=omd&&size_t(from[j])<omd->values.size()?omd->values[from[j]]:0;}} // SNORCA
                     if(mixed.active){const auto vmap=snorca_mixed_apply(mixed);model_undo=snorca_remap_model(row_remap,&vmap);} // SNORCA: one pass, physical and mixed
                     else bundle->update_multi_material_filament_presets();
-                    wxGetApp().plater()->on_filaments_change(rows.size());
+                    for (const auto &name : bundle->filament_presets) {
+                        if (auto *preset = bundle->filaments.find_preset(name, false); preset && preset->is_system && !preset->is_visible) {
+                            revealed_presets.push_back(name);
+                            preset->is_visible = true;
+                        }
+                    }
+                    wxGetApp().plater()->on_filaments_change(rows.size(), /*paint_already_remapped=*/true);
                     for(auto* combo:self->p->combos_filament)combo->update();
                     self->update_nozzle_filament_slots();self->update_dynamic_filament_list();
                     wxGetApp().plater()->on_config_change(bundle->full_config());
@@ -474,16 +569,15 @@ void Sidebar::sync_snorca_filaments(bool manual)
                     if(planned.value("clean_empty_palette",false)&&snorca_legacy_cleanup_grant_matches(before))wxGetApp().app_config->set("snorca_filament_startup_replace_v1",""); // SNORCA
                     if(planned.value("clean_empty_palette",false)&&snorca_verified_empty_repair(before,address,serial))wxGetApp().app_config->set("snorca_filament_repair_v1",""); // SNORCA
                     bundle->export_selections(*wxGetApp().app_config);
+                    for (const auto &name : revealed_presets)
+                        wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, name, "true");
                     self->p->snorca_sync_undo_config.reset(new DynamicPrintConfig(old_config));self->p->snorca_sync_undo_printer.reset(new DynamicPrintConfig(old_printer));self->p->snorca_sync_undo_presets=old_presets;self->p->snorca_sync_undo_multicolor=old_multicolor;
                     self->reset_snorca_filament_sync_baseline();self->p->snorca_sync_undo_after=snorca_palette_state().dump();self->p->snorca_sync_last_palette=self->p->snorca_sync_undo_after;self->p->snorca_sync_undo->Enable(true); // SNORCA
-                    std::string labels;
-                    for(size_t i=0;i<rows.size();++i){const auto& own=rows[i].at("ownership");if(own.empty())continue;
-                        std::string label=own.value("label",std::string());labels+=std::to_string(i+1)+": "+label+" → nozzle "+std::to_string(rows[i].at("nozzle").get<int>()+1)+", slot "+std::to_string(rows[i].at("mms_slot").get<int>()+1)+"\n";
-                        if(i<self->p->combos_filament.size())self->p->combos_filament[i]->SetToolTip(wxString::FromUTF8(label));}
-                    self->p->snorca_sync_status->SetToolTip(wxString::FromUTF8(labels));
-                    // SNORCA: short result line; details (what was removed, moved or kept, notes, routes) in the tooltip and the log.
-                    std::string summary=result_label.empty()?"Synced "+plural(printer_n,"filament","filaments")+" from "+preset_name:result_label; // SNORCA
-                    std::string tip=(result_note.empty()?std::string():result_note+"\n")+"Synced "+plural(printer_n,"filament","filaments")+" from "+address+"."; // SNORCA
+                    update_feed_tooltips(rows);
+                    // The tooltip keeps the physical slot and its destination nozzle separate.
+                    std::string summary = result_label.empty() ? "Synced " + preset_name + " (" + loadout + ")" : result_label;
+                    std::string tip = (result_note.empty() ? std::string() : result_note + "\n") + loadout + " at " + address +
+                        ". Loaded counts feeds the printer reports as ready.";
                     if(!mixed.dropped.empty()){summary+="; removed "+plural(mixed.dropped.size(),"mixed filament","mixed filaments"); // SNORCA (2026-11-14)
                         tip+="\n"+plural(mixed.dropped.size(),"mixed filament was","mixed filaments were")+" removed because a filament "+(mixed.dropped.size()==1?"it":"they")+" mixed is no longer in the list; objects that used "+(mixed.dropped.size()==1?"it":"them")+" now use their default filament:"; // SNORCA
                         for(const auto& d:mixed.dropped)tip+="\n  "+d;} // SNORCA
@@ -501,7 +595,9 @@ void Sidebar::sync_snorca_filaments(bool manual)
                         sp.snorca_sync_move_before_mc=old_multicolor;sp.snorca_sync_move_after_mc=bundle->ams_multi_color_filment;} // SNORCA
                     status(summary,tip+"\n"+inventory_details); // SNORCA
                 }catch(...){for(auto it=model_undo.rbegin();it!=model_undo.rend();++it)(*it)(); // SNORCA: model back as it was
-                    bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;snorca_mixed_reload(bundle,&mixed);wxGetApp().plater()->on_filaments_change(old_presets.size());wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
+                    for (const auto &name : revealed_presets)
+                        if (auto *preset = bundle->filaments.find_preset(name, false)) preset->is_visible = false;
+                    bundle->filament_presets=old_presets;bundle->project_config=old_config;bundle->ams_multi_color_filment=old_multicolor;snorca_mixed_reload(bundle,&mixed);wxGetApp().plater()->on_filaments_change(old_presets.size(), /*paint_already_remapped=*/true);wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
                     wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update();throw;}
             }catch(const std::exception& e){status(std::string("Sync retained palette: ")+e.what());}
         });
@@ -527,7 +623,7 @@ void Sidebar::snorca_sync_follow_undo_redo() // SNORCA
         bundle->filament_presets=undo?sp.snorca_sync_move_before_presets:sp.snorca_sync_move_after_presets; // SNORCA
         bundle->project_config=cfg;bundle->ams_multi_color_filment=undo?sp.snorca_sync_move_before_mc:sp.snorca_sync_move_after_mc; // SNORCA
         SnorcaQuietGradients quiet_gradients;snorca_mixed_reload(bundle); // SNORCA (2026-11-14): mixed list from the restored definitions
-        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size());for(auto* combo:p->combos_filament)combo->update(); // SNORCA
+        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size(), /*paint_already_remapped=*/true);for(auto* combo:p->combos_filament)combo->update(); // SNORCA
         update_nozzle_filament_slots();update_dynamic_filament_list();wxGetApp().plater()->on_config_change(bundle->full_config()); // SNORCA
         wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update(); // SNORCA
         bundle->export_selections(*wxGetApp().app_config); // SNORCA
@@ -547,7 +643,7 @@ void Sidebar::undo_snorca_filament_sync()
         bundle->filament_presets=p->snorca_sync_undo_presets;bundle->project_config=*p->snorca_sync_undo_config;bundle->ams_multi_color_filment=p->snorca_sync_undo_multicolor;
         if(p->snorca_sync_undo_printer)wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(*p->snorca_sync_undo_printer);
         SnorcaQuietGradients quiet_gradients;snorca_mixed_reload(bundle); // SNORCA (2026-11-14)
-        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size());for(auto* combo:p->combos_filament)combo->update();
+        wxGetApp().plater()->on_filaments_change(bundle->filament_presets.size(), /*paint_already_remapped=*/true);for(auto* combo:p->combos_filament)combo->update();
         update_nozzle_filament_slots();update_dynamic_filament_list();wxGetApp().plater()->on_config_change(bundle->full_config());
                     wxGetApp().plater()->sidebar().obj_list()->update_filament_colors();wxGetApp().plater()->update();
         bundle->export_selections(*wxGetApp().app_config);p->snorca_sync_undo_config.reset();p->snorca_sync_undo_printer.reset();p->snorca_sync_undo->Enable(false);
